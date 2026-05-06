@@ -44,12 +44,42 @@ output_folder <- file.path(work_dir, "output")
 # =============================================================================
 data <- read.csv(file.path(output_folder, "intermediate",
                            "block_and_time_bins_for_stats.csv"))
-unique(data$pt_pre24_IMV)
 colnames(data)
 
-df <- subset(data, select = -c(1, 2, 10, 13, 14, 20, 27, 33, 34, 37))
+# ---- Factorise -------------------------------
+fac_vars <- c("sex_category", "race_category", "ethnicity_category",
+              "language_category", "ICU_type")
+data[fac_vars] <- lapply(data[fac_vars], function(x) {
+  x[x == ""] <- NA
+  factor(x)
+})
+
+# ---- Covariate lists ---------------------------------------------------------
+# Fixed (baseline) covariates — same as before
+base_vars <- c("age", "sex_category", "race_category", "ethnicity_category",
+               "weight_kg", "language_category","elixhauser_age_adj","ICU_type")
+
+# Time-varying covariates measured at each time_bin
+tv_vars <- c("heart_rate_mean", "map_mean", "fio2_set_mean", "peep_set_mean",
+             "pressor_flag", "paralytics_flag")
+
+# Outcome Variables
+out_vars <- c("vent_free_days","icu_los_days","is_dead_hosp","is_dead_30","is_dead_365")
+
+#All covars, used to determine complete case analysis.
+all_covars <- c(base_vars, tv_vars)
+
+# Combined covariates & columns needed for complete analysis of the CCW.
+all_vars <- c("encounter_block","time_bin","bin_start","bin_end","pt_order",
+                "pt_now","pt_post48_IMV",base_vars, tv_vars)
+
+df <- subset(data, select = all_vars)
 df <- df[order(df$encounter_block, df$time_bin), ]
 
+# Block level data frame for outcomes regression later
+block_df <- subset(data, select = c("encounter_block", base_vars, out_vars))
+block_df <- block_df[!duplicated(block_df$encounter_block), ]
+                   
 # ---- Censor indicators -------------------------------------------------------
 # Clone N: censored from the first PT bin onward (pt_order fills forward)
 df$PT_censor_N <- df$pt_order
@@ -58,42 +88,17 @@ df$PT_censor_N <- df$pt_order
 df$pt_post48_IMV = df$pt_post48_IMV == "True"
 df$PT_censor_E <- ifelse((!df$pt_post48_IMV) & df$bin_end == 48, 1, 0)
 
-# ---- Drop columns no longer needed / factorise -------------------------------
-df1 <- subset(df, select = -c(9, 10, 11, 12, 13, 14, 15, 19, 20))
-
-df1$race_category[df1$race_category   == ""] <- NA
-df1$ethnicity_category[df1$ethnicity_category == ""] <- NA
-df1$language_category[df1$language_category  == ""] <- NA
-df1$ICU_type[df1$ICU_type             == ""] <- NA
-
-fac_vars <- c("sex_category", "race_category", "ethnicity_category",
-              "language_category", "ICU_type")
-for (v in fac_vars) df1[[v]] <- as.factor(df1[[v]])
-
-# ---- Covariate lists ---------------------------------------------------------
-# Fixed (baseline) covariates — same as before
-base_vars <- c("age", "sex_category", "race_category", "ethnicity_category",
-               "weight_kg", "language_category", "ICU_type")
-
-# Time-varying covariates measured at each time_bin
-tv_vars <- c("heart_rate_mean", "map_mean", "fio2_set_mean", "peep_set_mean",
-             "pressor_flag", "paralytics_flag")
-
-# Combined covariate formula RHS (no time_bin_f term — that is now handled by
-# splitting the data and fitting separate models per bin)
-all_covars <- c(base_vars, tv_vars)
-
 # ---- Build clone-specific datasets -------------------------------------------
 # Clone N: keep rows up to and including the first PT bin (or all rows if no PT)
-keep_N <- df1$PT_censor_N == 0 | df1$pt_now == 1
-df_N   <- df1[keep_N, ]
-df_N <- subset(df_N, select = -c(20))   # drop censor E column
-
-df_E   <- subset(df1, select = -c(19))
+keep_N <- df$PT_censor_N == 0 | df$pt_now == 1
+df_N   <- df[keep_N, ]
+d_c <- "PT_censor_E"
+df_N <- df_N %>% select(-d_c)   # drop censor E column
+d_c <- "PT_censor_N"
+df_E   <- df %>% select(-d_c)
 
 # =============================================================================
 # 2.  COMPLETE-CASE FILTER
-#     (same as before, but note: we no longer need time_bin_f in vars_all_*)
 # =============================================================================
 vars_needed_N <- c("PT_censor_N", all_covars)
 df_N <- df_N[complete.cases(df_N[, vars_needed_N]), ]
@@ -266,7 +271,7 @@ weights_N <- fit_interval_weights(
   base_vars    = base_vars,
   tv_vars      = tv_vars,
   pt_now_logic = FALSE,
-  stabilize = TRUE
+  stabilize = FALSE
 )
 
 message("Fitting per-time-bin GLMs for Clone E ...")
@@ -276,7 +281,7 @@ weights_E <- fit_interval_weights(
   base_vars    = base_vars,
   tv_vars      = tv_vars,
   pt_now_logic = FALSE,
-  stabilize = TRUE
+  stabilize = FALSE
 )
 
 # Merge weights back onto the clone data frames for downstream use/diagnostics
@@ -347,21 +352,12 @@ ggsave(file.path(output_folder, "final", "graphs", "trim_IPCW_trajectory.pdf"),
 # =============================================================================
 # 6.  OUTCOME MODEL SETUP  (unchanged from original)
 # =============================================================================
-block_df <- read.csv(file.path(output_folder, "intermediate", "block_for_stats.csv"))
-colnames(block_df)
 
-block_df <- block_df[block_df$pt_pre24_IMV == "False", ]
 block_df$vent_free_days <- as.integer(block_df$vent_free_days)
 block_df$icu_los_days   <- as.integer(block_df$icu_los_days)
 block_df$is_dead_hosp   <- ifelse(block_df$is_dead_hosp  == "True", 1, 0)
 block_df$is_dead_30     <- ifelse(block_df$is_dead_30    == "True", 1, 0)
 block_df$is_dead_365    <- ifelse(block_df$is_dead_365   == "True", 1, 0)
-
-block_df$race_category[block_df$race_category         == ""] <- NA
-block_df$ethnicity_category[block_df$ethnicity_category == ""] <- NA
-block_df$language_category[block_df$language_category   == ""] <- NA
-block_df$ICU_type[block_df$ICU_type                     == ""] <- NA
-for (v in fac_vars) block_df[[v]] <- as.factor(block_df[[v]])
 
 # Join final weights onto the outcome data (one row per encounter × clone)
 outcome_df <- bind_rows(

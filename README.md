@@ -30,7 +30,7 @@
 
 - Open `config/config.json`
 - Fill out the site_name, clif_folder path and time_zone. A MIMIC folder path will only be used if the site name string contains mimic (ie. MIMIC-CLIF)
-- `time_bin_size` and `time_end` should be 4 and 48 respectively but they are the configuration to be customized if needed.
+- `time_bin_size` and `time_end` should be 12 and 48 respectively but they are included in the configuration to be customized if needed.
 
 4. **Run Script**: Run the entire pipeline using the commands.
 ```

@@ -27,7 +27,7 @@ braden_mobility_0_24h_max,Max Braden Mobility Scale (0-24 hours),0,0,
 braden_mobility_last,Max Braden Mobility Scale (Last 24 hours),0,0,
 Time_first_PT,Time to First PT Order after IMV (hours),0,0,
 pt_ever,PT order ever after IMV,0,0,
-pt_post48_IMV,PT order withint 48 hours after IMV,1,0,
+pt_post48_IMV,PT order within 48 hours after IMV,1,0,
 pt_between_ICU_IMV,PT order placed after IMV but before ICU admission,0,0,
 pt_pre24_IMV,PT order within 24 hours prior to IMV,0,0,Exclude this group
 yellow_time_eligibility,Time to Yellow Eligibility after IMV (hours),0,0,

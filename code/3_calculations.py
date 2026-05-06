@@ -680,7 +680,7 @@ helper.missing_summary(block_df,f_name='block_df_3_end')
 # ## Remove obersvations with prior PT order
 # Remove any `encounter_block` from both `block_df` and `time_bin.df` where `pt_pre24_IMV` == `True`.
 
-# In[21]:
+# In[24]:
 
 
 #Exclusion criteria

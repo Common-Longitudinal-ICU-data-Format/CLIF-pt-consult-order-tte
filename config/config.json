@@ -4,8 +4,8 @@
     "mimic":"/nfs/roberts/project/pi_sj692/shared/mimiciv",
     "time_zone":"America/New_York",
     "file_type":"parquet",
-    "time_bin_size":4,
+    "time_bin_size":12,
     "time_end":48,
-    "comment":"Fill out the site_name, clif_folder path and time_zone. A MIMIC folder path will only be used if the site name string contains mimic (ie. MIMIC-CLIF) time_bin_size and time_end should be 4 or 48 but they  are here to be customized if needed."
+    "comment":"Fill out the site_name, clif_folder path and time_zone. A MIMIC folder path will only be used if the site name string contains mimic (ie. MIMIC-CLIF) time_bin_size and time_end should be 12 and 48 by default."
 }
     
