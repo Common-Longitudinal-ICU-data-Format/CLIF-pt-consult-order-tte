@@ -2,16 +2,8 @@
 # 4_ccw_MV_revised.R
 # Clone-Censor Weighting (CCW) implementation
 #
-# KEY CHANGE FROM PRIOR VERSION:
-# Previously we fit ONE logistic GLM per clone strategy, including time_bin_f
-# as a factor covariate to handle all time points simultaneously.
-#
-# We now follow Webster-Clark et al. (2025, Pharmacoepidemiology & Drug Safety):
-#   - Fit a SEPARATE GLM for each time_bin × clone combination
-#     (i.e., one model per time point per strategy)
-#   - Response is CENSORING (PT_censor_*), not uncensoring
-#     (paper: Censor(t) ~ covariates(t); we get P(uncensored) = 1 - predicted)
-#   - For Clone E only, apply the "pt_now" (analogous to paper's "recentstart")
+#   - Stabilized versus unstabilized weights are a togable option for the weighting function.
+#   - For Clone E only, apply the "pt_now" (analogous to Webster et al. "recentstart")
 #     logic when assigning interval weights:
 #       * pt_now == 1  & uncensored  →  weight = 1 / P(uncensored)
 #       * pt_now == 0  & uncensored  →  weight = 1   (no upweighting needed)
@@ -21,23 +13,25 @@
 #   - Cumulative weight = product of all interval weights up to and including
 #     the current time bin (matching paper's multiplicative IPCW)
 #
-# This yields up to N_time_bins × 2 GLMs rather than 2 GLMs.
 # =============================================================================
 
 # ---- Packages ----------------------------------------------------------------
 packages <- c("tidyverse", "pscl", "ggplot2", "dplyr", "openxlsx",
-              "tibble", "cobalt", "this.path", "glue")
+              "tibble", "cobalt", "this.path", "glue","data.table")
 
 installed <- packages %in% rownames(installed.packages())
 if (any(!installed)) install.packages(packages[!installed])
 
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
-library(openxlsx); library(tibble); library(cobalt); library(this.path)
+library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)
 
 # ---- Paths -------------------------------------------------------------------
 setwd(dirname(this.path()))
 work_dir      <- normalizePath("..")
 output_folder <- file.path(work_dir, "output")
+
+#-----Bootstrapping Samples ----------------------------------------------------
+resample_N <- 10 #Effective bootstrapping resamples.
 
 # =============================================================================
 # 1.  LOAD & PREP DATA
@@ -54,7 +48,14 @@ data[fac_vars] <- lapply(data[fac_vars], function(x) {
   factor(x)
 })
 
-# ---- Covariate lists ---------------------------------------------------------
+# ---- Organize outcomes -------------------------------
+data$vent_free_days <- as.integer(data$vent_free_days)
+data$icu_los_days   <- as.integer(data$icu_los_days)
+data$is_dead_hosp   <- ifelse(data$is_dead_hosp  == "True", 1, 0)
+data$is_dead_30     <- ifelse(data$is_dead_30    == "True", 1, 0)
+data$is_dead_365    <- ifelse(data$is_dead_365   == "True", 1, 0)
+
+# ---- Covariate lists & Ordering ----------------------------------------------
 # Fixed (baseline) covariates — same as before
 base_vars <- c("age", "sex_category", "race_category", "ethnicity_category",
                "weight_kg", "language_category","elixhauser_age_adj","ICU_type")
@@ -71,43 +72,40 @@ all_covars <- c(base_vars, tv_vars)
 
 # Combined covariates & columns needed for complete analysis of the CCW.
 all_vars <- c("encounter_block","time_bin","bin_start","bin_end","pt_order",
-                "pt_now","pt_post48_IMV",base_vars, tv_vars)
+                "pt_now","pt_post48_IMV",base_vars, tv_vars, out_vars)
 
-df <- subset(data, select = all_vars)
-df <- df[order(df$encounter_block, df$time_bin), ]
+bin_df <- subset(data, select = all_vars)
+bin_df <- bin_df[order(bin_df$encounter_block, bin_df$time_bin), ]
 
-# Block level data frame for outcomes regression later
-block_df <- subset(data, select = c("encounter_block", base_vars, out_vars))
-block_df <- block_df[!duplicated(block_df$encounter_block), ]
-                   
+#Unique time bins
+time_bins <- sort(unique(bin_df$time_bin))
+
 # ---- Censor indicators -------------------------------------------------------
-# Clone N: censored from the first PT bin onward (pt_order fills forward)
-df$PT_censor_N <- df$pt_order
+# Censor N: censored from the first PT bin onward (pt_order fills forward)
+bin_df$PT_censor_N <- bin_df$pt_order
 
-# Clone E: censored only at the final bin (bin_end == 48) if PT never occurred
-df$pt_post48_IMV = df$pt_post48_IMV == "True"
-df$PT_censor_E <- ifelse((!df$pt_post48_IMV) & df$bin_end == 48, 1, 0)
-
-# ---- Build clone-specific datasets -------------------------------------------
-# Clone N: keep rows up to and including the first PT bin (or all rows if no PT)
-keep_N <- df$PT_censor_N == 0 | df$pt_now == 1
-df_N   <- df[keep_N, ]
-d_c <- "PT_censor_E"
-df_N <- df_N %>% select(-d_c)   # drop censor E column
-d_c <- "PT_censor_N"
-df_E   <- df %>% select(-d_c)
+# Censore E: censored only at the final bin (bin_end == 48) if PT never occurred
+bin_df$pt_post48_IMV = bin_df$pt_post48_IMV == "True"
+bin_df$PT_censor_E <- ifelse((!bin_df$pt_post48_IMV) & bin_df$bin_end == 48, 1, 0)
 
 # =============================================================================
 # 2.  COMPLETE-CASE FILTER
 # =============================================================================
-vars_needed_N <- c("PT_censor_N", all_covars)
-df_N <- df_N[complete.cases(df_N[, vars_needed_N]), ]
-df_N <- df_N[order(df_N$encounter_block, df_N$time_bin), ]
+separate_complete_frames <- function(df,
+                                     vars_needed = all_covars){
+  vars_needed_N <- c("PT_censor_N", vars_needed)
+  df_N <- df[complete.cases(df[, vars_needed_N]), ]
+  df_N$clone <- factor("N", levels = c("N", "E"))
+  df_N <- df_N[order(df_N$encounter_block, df_N$time_bin), ]
 
-vars_needed_E <- c("PT_censor_E", all_covars)
-df_E <- df_E[complete.cases(df_E[, vars_needed_E]), ]
-df_E <- df_E[order(df_E$encounter_block, df_E$time_bin), ]
-
+  vars_needed_E <- c("PT_censor_E", vars_needed)
+  df_E <- df[complete.cases(df[, vars_needed_E]), ]
+  df_E <- df_E[order(df_E$encounter_block, df_E$time_bin), ]
+  df_E$clone <- factor("E", levels = c("N", "E"))
+  
+  return(list(clones_N = df_N,clones_E = df_E))
+  
+}
 # =============================================================================
 # 3.  PER-TIME-BIN WEIGHTING  (Webster-Clark approach)
 #
@@ -118,37 +116,27 @@ df_E <- df_E[order(df_E$encounter_block, df_E$time_bin), ]
 #    d) Assign interval weight:
 #         Clone N : 1 / P(uncensored)   for uncensored rows
 #                   0                    for censored rows
-#         Clone E : 1 / P(uncensored)   if pt_now == 1  AND uncensored
-#                   1                    if pt_now == 0  AND uncensored
+#         Clone E : 1 / P(uncensored)   if pt_now == 1  AND uncensored or if not using pt_now logic.
+#                   1                    if pt_now == 0  AND uncensored and using pt_now logic.
 #                   0                    if censored
 #    e) Collect interval weights, then compute cumulative product per encounter
 #
-#  Why separate models per bin?
-#    Each time bin may have a different risk set (some encounters have been
-#    censored or have experienced the outcome in prior bins).  Fitting separate
-#    models avoids the assumption that the relationship between covariates and
-#    censoring is identical across all bins, which is the same rationale
-#    Webster-Clark use for their 0–30 / 30–90 / >90 day window models.
 # =============================================================================
-
 fit_interval_weights <- function(clone_df,
                                  censor_col,   # "PT_censor_N" or "PT_censor_E"
-                                 base_vars,
-                                 tv_vars,
                                  pt_now_logic = FALSE,
                                  stabilize = FALSE) {
   # pt_now_logic = TRUE  → Clone E weighting (use pt_now flag)
   # pt_now_logic = FALSE → Clone N weighting (always 1/p_uncens when uncensored)
 
+  #Probability of censoring formula
   rhs_formula <- paste(c(base_vars, tv_vars), collapse = " + ")
   form        <- as.formula(paste(censor_col, "~", rhs_formula))
-
-  time_bins <- sort(unique(clone_df$time_bin))
   
-  # Stabilized weights
+  # Stabilized weights formula
   rhs_stab <- paste(c(base_vars), collapse = " + ")
   form_stab <- as.formula(paste(censor_col, "~", rhs_stab))
-
+  
   # We will collect one row per (encounter_block × time_bin) with its interval
   # weight.  Using a list then rbinding is memory-efficient.
   results_list <- vector("list", length(time_bins))
@@ -259,67 +247,90 @@ fit_interval_weights <- function(clone_df,
     FUN = cumprod
   )
 
-  interval_weights
-}
-
-# ---- Run per-bin weighting for each clone ------------------------------------
-
-message("Fitting per-time-bin GLMs for Clone N ...")
-weights_N <- fit_interval_weights(
-  clone_df     = df_N,
-  censor_col   = "PT_censor_N",
-  base_vars    = base_vars,
-  tv_vars      = tv_vars,
-  pt_now_logic = FALSE,
-  stabilize = FALSE
-)
-
-message("Fitting per-time-bin GLMs for Clone E ...")
-weights_E <- fit_interval_weights(
-  clone_df     = df_E,
-  censor_col   = "PT_censor_E",
-  base_vars    = base_vars,
-  tv_vars      = tv_vars,
-  pt_now_logic = FALSE,
-  stabilize = FALSE
-)
-
-# Merge weights back onto the clone data frames for downstream use/diagnostics
-df_N <- df_N %>%
-  left_join(weights_N %>% dplyr::select(encounter_block, time_bin,
-                                         p_cens, p_uncens, interval_wt, IPCW),
-            by = c("encounter_block", "time_bin"))
-
-df_E <- df_E %>%
-  left_join(weights_E %>% dplyr::select(encounter_block, time_bin,
-                                         p_cens, p_uncens, interval_wt, IPCW),
-            by = c("encounter_block", "time_bin"))
-
-# =============================================================================
-# 4.  FINAL WEIGHTS
-#     Take the cumulative IPCW at the LAST observed time_bin for each encounter,
-#     keeping only encounters that completed the strategy (uncensored at exit).
-# =============================================================================
-make_final_weight <- function(dat, clone_label, censor_col) {
-  dat %>%
+  # Merge weights back onto the clone data frames for downstream use/diagnostics
+  clone_df <- clone_df %>%
+    left_join(interval_weights %>% dplyr::select(encounter_block, time_bin,
+                                          p_cens, p_uncens, interval_wt, IPCW),
+              by = c("encounter_block", "time_bin"))
+  
+  # Note we make this sample a global variable so we can review
+  # results from outside the function.
+  sample_df <<- clone_df
+  
+  #Make final weights for all clones by encounter block
+  clone_df <- clone_df %>%
     group_by(encounter_block) %>%
     slice_tail(n = 1) %>%                        # last observed bin
     filter(!!sym(censor_col) == 0) %>%           # must be uncensored at exit
-    ungroup() %>%
-    dplyr::select(encounter_block, IPCW) %>%
-    rename(weight = IPCW) %>%
-    mutate(clone = clone_label)
+    ungroup()
+  
+  return(clone_df)
 }
 
-w_E <- make_final_weight(df_E, "E", "PT_censor_E")
-w_N <- make_final_weight(df_N, "N", "PT_censor_N")
+# =============================================================================
+# 4.  COMBINE STEPS 2 & 3
+# =============================================================================
+all_vars_final <- c("encounter_block","pt_post48_IMV","clone","IPCW", base_vars, out_vars)
+clone_and_weight <- function(bin_data) {
+  #Create clone data frames
+  clone_frames <- separate_complete_frames(bin_data)
+  
+  #Give them weights
+  clone_frames$clones_N <- fit_interval_weights(
+    clone_df     = clone_frames$clones_N,
+    censor_col   = "PT_censor_N",
+    pt_now_logic = FALSE,
+    stabilize = FALSE
+  )
+  weights_N <<- sample_df #This is for analysis later of the original data set only.
+  
+  clone_frames$clones_E <- fit_interval_weights(
+    clone_df     = clone_frames$clones_E,
+    censor_col   = "PT_censor_E",
+    pt_now_logic = FALSE,
+    stabilize = FALSE
+  )
+  weights_E <<- sample_df #This is for analysis later of the original data set only.
+  
+  #Create one large analytic cohort
+  out_df <- bind_rows(clone_frames$clones_N, clone_frames$clones_E)
+  out_df <- subset(out_df, select = all_vars_final)
+  
+  # Trim weights at 1st / 99th percentile
+  w_cut <- quantile(out_df$IPCW, probs = c(0.01, 0.99), na.rm = TRUE)
+  out_df <- out_df %>%
+    mutate(IPCW_trim = pmin(pmax(IPCW, w_cut[[1]]), w_cut[[2]]))
+  
+  return(out_df)
+}
+
+#Call the above function for the original data set (no bootstrapping)
+original_analysis_df <- clone_and_weight(bin_df)
 
 # =============================================================================
-# 5.  IPCW TRAJECTORY PLOT  (diagnostic — same structure as before)
+# 5.  IPCW Summaries  (diagnostic)
+# It uses the weights from the original sample. Not for bootstrapping.
 # =============================================================================
+
+#Quick weight analytics
+print(paste("Missing weights: ",sum(is.na(original_analysis_df$IPCW))))
+print(paste("Infinite weights: ",sum(!is.finite(original_analysis_df$IPCW))))
+print(paste("Zero weights: ",sum(original_analysis_df$IPCW == 0)))
+print(paste("Weight summary (untrimmed): ", summary(original_analysis_df$IPCW)))
+print(paste("Weight summary (trimmed): ", summary(original_analysis_df$IPCW_trim)))
+
+original_analysis_df <- original_analysis_df %>%
+  filter(!is.na(IPCW_trim), is.finite(IPCW_trim), IPCW_trim > 0)
+
+# =============================================================================
+# 6.  IPCW PLOTS  (diagnostic)
+# It uses the weights from the original sample. Not for bootstrapping.
+# =============================================================================
+
+#Trajectory over time plots
 ipcw_long <- bind_rows(
-  df_N %>% mutate(clone = "N"),
-  df_E %>% mutate(clone = "E")
+  weights_N %>% mutate(clone = "N"),
+  weights_E %>% mutate(clone = "E")
 ) %>%
   filter(!is.na(IPCW), is.finite(IPCW), IPCW > 0) %>%
   mutate(
@@ -349,47 +360,8 @@ p_ipcw_time1 <- ggplot(ipcw_long, aes(x = time_bin_f, y = IPCW_trim, fill = clon
 ggsave(file.path(output_folder, "final", "graphs", "trim_IPCW_trajectory.pdf"),
        plot = p_ipcw_time1, width = 8, height = 5)
 
-# =============================================================================
-# 6.  OUTCOME MODEL SETUP  (unchanged from original)
-# =============================================================================
-
-block_df$vent_free_days <- as.integer(block_df$vent_free_days)
-block_df$icu_los_days   <- as.integer(block_df$icu_los_days)
-block_df$is_dead_hosp   <- ifelse(block_df$is_dead_hosp  == "True", 1, 0)
-block_df$is_dead_30     <- ifelse(block_df$is_dead_30    == "True", 1, 0)
-block_df$is_dead_365    <- ifelse(block_df$is_dead_365   == "True", 1, 0)
-
-# Join final weights onto the outcome data (one row per encounter × clone)
-outcome_df <- bind_rows(
-  block_df %>% mutate(clone = "E") %>% left_join(w_E, by = c("encounter_block", "clone")),
-  block_df %>% mutate(clone = "N") %>% left_join(w_N, by = c("encounter_block", "clone"))
-) %>%
-  mutate(clone = factor(clone, levels = c("N", "E")))
-
-summary(outcome_df$weight)
-quantile(outcome_df$weight, c(0, .01, .05, .25, .5, .75, .95, .99, 1), na.rm = TRUE)
-table(outcome_df$clone)
-sum(is.na(outcome_df$weight))
-sum(!is.finite(outcome_df$weight))
-
-# Diagnose missing weights
-missing_weights <- outcome_df[is.na(outcome_df$weight), ]
-tapply(missing_weights$encounter_block, missing_weights$clone,
-       function(x) length(unique(x)))
-
-outcome_df <- outcome_df %>%
-  filter(!is.na(weight), is.finite(weight), weight > 0)
-
-# Trim weights at 1st / 99th percentile
-w_cut <- quantile(outcome_df$weight, probs = c(0.01, 0.99), na.rm = TRUE)
-outcome_df <- outcome_df %>%
-  mutate(weight_trim = pmin(pmax(weight, w_cut[[1]]), w_cut[[2]]))
-
-summary(outcome_df$weight_trim)
-quantile(outcome_df$weight_trim, probs = c(0, .01, .05, .25, .5, .75, .95, .99, 1))
-
-# Weight distribution plots
-g <- ggplot(outcome_df, aes(x = weight, fill = clone)) +
+#Final Weights Plot
+g <- ggplot(original_analysis_df, aes(x = IPCW, fill = clone)) +
   geom_histogram(bins = 60, alpha = 0.5, position = "identity") +
   theme_bw() +
   labs(title = "Distribution of final weights by clone",
@@ -397,7 +369,7 @@ g <- ggplot(outcome_df, aes(x = weight, fill = clone)) +
 ggsave(file.path(output_folder, "final", "graphs", "original_final_IPCW.pdf"),
        plot = g, width = 7, height = 5)
 
-g1 <- ggplot(outcome_df, aes(x = weight_trim, fill = clone)) +
+g1 <- ggplot(original_analysis_df, aes(x = IPCW_trim, fill = clone)) +
   geom_histogram(bins = 60, alpha = 0.5, position = "identity") +
   theme_bw() +
   labs(title = "Distribution of trimmed final weights by clone",
@@ -405,11 +377,13 @@ g1 <- ggplot(outcome_df, aes(x = weight_trim, fill = clone)) +
 ggsave(file.path(output_folder, "final", "graphs", "trim_final_IPCW.pdf"),
        plot = g1, width = 7, height = 5)
 
+
 # =============================================================================
-# 7.  BASELINE COVARIATE BALANCE CHECK  (unchanged)
+# 7.  BASELINE COVARIATE BALANCE CHECK
+# It uses the weights from the original sample. Not for bootstrapping.
 # =============================================================================
-bal_ccw <- bal.tab(x = outcome_df[, base_vars], treat = outcome_df$clone,
-                   weights = outcome_df$weight_trim, method = "weighting",
+bal_ccw <- bal.tab(x = original_analysis_df[, base_vars], treat = original_analysis_df$clone,
+                   weights = original_analysis_df$IPCW_trim, method = "weighting",
                    estimand = "ATE", s.d.denom = "pooled", un = TRUE)
 print(bal_ccw)
 
@@ -422,36 +396,93 @@ ggsave(file.path(output_folder, "final", "graphs", "balance_plot_IPCW.pdf"),
        plot = p_balance, width = 8, height = 6)
 
 # =============================================================================
-# 8.  OUTCOME MODELS  (unchanged)
+# 8.  OUTCOME MODELS
 # =============================================================================
 
-##### VFD: ZINB #####
-fit_vfd <- zeroinfl(vent_free_days ~ clone | 1, data = outcome_df,
-                    dist = "negbin", weights = weight_trim)
-summary(fit_vfd)
+#Create an outcomes data frame for bootstrapping
+out_boot_df <- data.frame(
+  iteration  = character(),
+  type       = character(), #MV versus simple
+  VFD_N      = numeric(),
+  VFD_E      = numeric(),
+  ICU_LOS_N  = numeric(),
+  ICU_LOS_E  = numeric(),
+  dead_hosp_N = numeric(),
+  dead_hosp_E = numeric(),
+  dead_30_N  = numeric(),
+  dead_30_E  = numeric(),
+  dead_365_N = numeric(),
+  dead_365_E = numeric(),
+  stringsAsFactors = FALSE
+)
+#Note that this will store both simple regression and MV regression as well
+#as the original sample so the number of rows here will be larger than the
+#number of bootstrap resamples.
 
-##### ICU LOS: Poisson #####
-fit_icu_los <- glm(icu_los_days ~ clone, data = outcome_df,
-                   family = poisson(), weights = weight_trim)
-summary(fit_icu_los)
+#Function to calculate treatment effect with model + data
+standardized_contrast <- function(fit, data, outcome_name, clone_var = "clone") {
+  dE <- data; dN <- data
+  dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
+  dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
+  pred_E <- predict(fit, newdata = dE, type = "response")
+  pred_N <- predict(fit, newdata = dN, type = "response")
+  pred <- tibble(mean_pred_E    = mean(pred_E, na.rm = TRUE),
+         mean_pred_N    = mean(pred_N, na.rm = TRUE))
+  
+  return(pred)
+}
 
-##### Hospital mortality: Binary #####
-fit_dead_hosp <- glm(is_dead_hosp ~ clone, data = outcome_df,
-                     family = binomial(), weights = weight_trim)
-summary(fit_dead_hosp)
-
-##### 30-day mortality: Binary #####
-fit_dead_30 <- glm(is_dead_30 ~ clone, data = outcome_df,
-                   family = binomial(), weights = weight_trim)
-summary(fit_dead_30)
-
-##### 1-year mortality: Binary #####
-fit_dead_365 <- glm(is_dead_365 ~ clone, data = outcome_df,
-                    family = binomial(), weights = weight_trim)
-summary(fit_dead_365)
+model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
+  
+  #Regression type sets the RHS of the formula
+  if (type_reg == "simple") {
+    mv_rhs <- 'clone'
+  } else {
+    mv_rhs <- paste(c("clone", base_vars), collapse = " + ")
+  }
+  
+  #Models declared globally so they can be reviewed for the original sample.
+  ##### VFD: ZINB #####
+  fit_vfd       <<- zeroinfl(as.formula(paste("vent_free_days ~", mv_rhs, "| 1")),
+                               data = sample_df, dist = "negbin", weights = IPCW_trim)
+  ##### ICU LOS: Poisson #####
+  fit_icu_los   <<- glm(as.formula(paste("icu_los_days ~", mv_rhs)),
+                          data = sample_df, family = poisson(),   weights = IPCW_trim)
+  ##### Hospital mortality: Binary #####
+  fit_dead_hosp <<- glm(as.formula(paste("is_dead_hosp ~", mv_rhs)),
+                          data = sample_df, family = binomial(),  weights = IPCW_trim)
+  ##### 30-day mortality: Binary #####
+  fit_dead_30   <<- glm(as.formula(paste("is_dead_30 ~", mv_rhs)),
+                          data = sample_df, family = binomial(),  weights = IPCW_trim)
+  ##### 1-year mortality: Binary #####
+  fit_dead_365  <<- glm(as.formula(paste("is_dead_365 ~", mv_rhs)),
+                          data = sample_df, family = binomial(),  weights = IPCW_trim)
+  
+  vfd_con       <- standardized_contrast(fit_vfd, sample_df, "vent_free_days")
+  icu_con       <- standardized_contrast(fit_icu_los, sample_df, "icu_los_days")
+  dead_hosp_con <- standardized_contrast(fit_dead_hosp, sample_df, "is_dead_hosp")
+  dead_30_con   <- standardized_contrast(fit_dead_30, sample_df, "is_dead_30")
+  dead_365_con  <- standardized_contrast(fit_dead_365, sample_df, "is_dead_365")
+  
+  data.frame(
+    iteration   = iteration_n,
+    type        = type_reg,
+    VFD_N       = vfd_con$mean_pred_N,
+    VFD_E       = vfd_con$mean_pred_E,
+    ICU_LOS_N   = icu_con$mean_pred_N,
+    ICU_LOS_E   = icu_con$mean_pred_E,
+    dead_hosp_N = dead_hosp_con$mean_pred_N,
+    dead_hosp_E = dead_hosp_con$mean_pred_E,
+    dead_30_N   = dead_30_con$mean_pred_N,
+    dead_30_E   = dead_30_con$mean_pred_E,
+    dead_365_N  = dead_365_con$mean_pred_N,
+    dead_365_E  = dead_365_con$mean_pred_E
+  )
+}
 
 # =============================================================================
-# 9.  RESULTS ORGANISATION  (unchanged)
+# 9.  RESULTS ORGANISATION
+# Save the regression models for the original data set
 # =============================================================================
 extract_glm_table <- function(fit, model_name) {
   sm  <- summary(fit)$coefficients
@@ -479,79 +510,184 @@ extract_zeroinfl_table <- function(fit, model_name) {
   bind_rows(out_count, out_zero)
 }
 
+#Create model (simple regressions)
+out_boot_df <- rbind(out_boot_df, model_outcomes(original_analysis_df,"original",type_reg = "simple"))
+
+#Create tabs
 tab_vfd      <- extract_zeroinfl_table(fit_vfd,      "vent_free_days")
 tab_icu_los  <- extract_glm_table(fit_icu_los,       "icu_los_days")
 tab_dead_hosp<- extract_glm_table(fit_dead_hosp,     "is_dead_hosp")
 tab_dead_30  <- extract_glm_table(fit_dead_30,       "is_dead_30")
 tab_dead_365 <- extract_glm_table(fit_dead_365,      "is_dead_365")
-
-standardized_contrast <- function(fit, data, outcome_name, clone_var = "clone") {
-  dE <- data; dN <- data
-  dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
-  dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
-  pred_E <- predict(fit, newdata = dE, type = "response")
-  pred_N <- predict(fit, newdata = dN, type = "response")
-  tibble(outcome        = outcome_name,
-         mean_pred_E    = mean(pred_E, na.rm = TRUE),
-         mean_pred_N    = mean(pred_N, na.rm = TRUE),
-         diff_E_minus_N = mean(pred_E, na.rm = TRUE) - mean(pred_N, na.rm = TRUE),
-         ratio_E_over_N = mean(pred_E, na.rm = TRUE) / mean(pred_N, na.rm = TRUE))
-}
-
-pred_vfd  <- standardized_contrast(fit_vfd,       outcome_df, "vent_free_days")
-pred_icu  <- standardized_contrast(fit_icu_los,   outcome_df, "icu_los_days")
-pred_hosp <- standardized_contrast(fit_dead_hosp, outcome_df, "is_dead_hosp")
-pred_30   <- standardized_contrast(fit_dead_30,   outcome_df, "is_dead_30")
-pred_365  <- standardized_contrast(fit_dead_365,  outcome_df, "is_dead_365")
-pred_contrast_tab <- bind_rows(pred_vfd, pred_icu, pred_hosp, pred_30, pred_365)
-
+#Save to excel file
 wb <- createWorkbook()
 addWorksheet(wb, "VFD");             writeData(wb, "VFD",              tab_vfd)
 addWorksheet(wb, "ICU_LOS");         writeData(wb, "ICU_LOS",          tab_icu_los)
 addWorksheet(wb, "Hosp");            writeData(wb, "Hosp",             tab_dead_hosp)
 addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_30)
 addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
-addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", pred_contrast_tab)
+addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", out_boot_df[1,])
 saveWorkbook(wb, file = file.path(output_folder, "final", "ccw_IPCW_results.xlsx"),
              overwrite = TRUE)
 
-# =============================================================================
-# 10.  MULTIVARIATE OUTCOME MODELS  (unchanged)
-# =============================================================================
-mv_rhs <- paste(c("clone", base_vars), collapse = " + ")
+#Create model (MV regressions)
+#Create model (simple regressions)
+out_boot_df <- rbind(out_boot_df, model_outcomes(original_analysis_df,"original",type_reg = "MV"))
 
-fit_vfd_mv       <- zeroinfl(as.formula(paste("vent_free_days ~", mv_rhs, "| 1")),
-                             data = outcome_df, dist = "negbin", weights = weight_trim)
-fit_icu_los_mv   <- glm(as.formula(paste("icu_los_days ~", mv_rhs)),
-                        data = outcome_df, family = poisson(),   weights = weight_trim)
-fit_dead_hosp_mv <- glm(as.formula(paste("is_dead_hosp ~", mv_rhs)),
-                        data = outcome_df, family = binomial(),  weights = weight_trim)
-fit_dead_30_mv   <- glm(as.formula(paste("is_dead_30 ~", mv_rhs)),
-                        data = outcome_df, family = binomial(),  weights = weight_trim)
-fit_dead_365_mv  <- glm(as.formula(paste("is_dead_365 ~", mv_rhs)),
-                        data = outcome_df, family = binomial(),  weights = weight_trim)
-
-tab_vfd_mv       <- extract_zeroinfl_table(fit_vfd_mv,       "vent_free_days")
-tab_icu_los_mv   <- extract_glm_table(fit_icu_los_mv,        "icu_los_days")
-tab_dead_hosp_mv <- extract_glm_table(fit_dead_hosp_mv,      "is_dead_hosp")
-tab_dead_30_mv   <- extract_glm_table(fit_dead_30_mv,        "is_dead_30")
-tab_dead_365_mv  <- extract_glm_table(fit_dead_365_mv,       "is_dead_365")
-
-pred_vfd_mv  <- standardized_contrast(fit_vfd_mv,       outcome_df, "vent_free_days")
-pred_icu_mv  <- standardized_contrast(fit_icu_los_mv,   outcome_df, "icu_los_days")
-pred_hosp_mv <- standardized_contrast(fit_dead_hosp_mv, outcome_df, "is_dead_hosp")
-pred_30_mv   <- standardized_contrast(fit_dead_30_mv,   outcome_df, "is_dead_30")
-pred_365_mv  <- standardized_contrast(fit_dead_365_mv,  outcome_df, "is_dead_365")
-pred_contrast_tab_mv <- bind_rows(pred_vfd_mv, pred_icu_mv, pred_hosp_mv,
-                                  pred_30_mv, pred_365_mv)
-
-wb_mv <- createWorkbook()
-addWorksheet(wb_mv, "VFD");             writeData(wb_mv, "VFD",              tab_vfd_mv)
-addWorksheet(wb_mv, "ICU_LOS");         writeData(wb_mv, "ICU_LOS",          tab_icu_los_mv)
-addWorksheet(wb_mv, "Hosp");            writeData(wb_mv, "Hosp",             tab_dead_hosp_mv)
-addWorksheet(wb_mv, "30Day");           writeData(wb_mv, "30Day",            tab_dead_30_mv)
-addWorksheet(wb_mv, "1Year");           writeData(wb_mv, "1Year",            tab_dead_365_mv)
-addWorksheet(wb_mv, "Predicted_Contrast"); writeData(wb_mv, "Predicted_Contrast", pred_contrast_tab_mv)
-saveWorkbook(wb_mv,
-             file = file.path(output_folder, "final", "ccw_IPCW_results_multivariate.xlsx"),
+#Create tabs
+tab_vfd      <- extract_zeroinfl_table(fit_vfd,      "vent_free_days")
+tab_icu_los  <- extract_glm_table(fit_icu_los,       "icu_los_days")
+tab_dead_hosp<- extract_glm_table(fit_dead_hosp,     "is_dead_hosp")
+tab_dead_30  <- extract_glm_table(fit_dead_30,       "is_dead_30")
+tab_dead_365 <- extract_glm_table(fit_dead_365,      "is_dead_365")
+#Save to excel file
+wb <- createWorkbook()
+addWorksheet(wb, "VFD");             writeData(wb, "VFD",              tab_vfd)
+addWorksheet(wb, "ICU_LOS");         writeData(wb, "ICU_LOS",          tab_icu_los)
+addWorksheet(wb, "Hosp");            writeData(wb, "Hosp",             tab_dead_hosp)
+addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_30)
+addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
+addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", out_boot_df[2,])
+saveWorkbook(wb, file = file.path(output_folder, "final", "ccw_IPCW_results_multivariate.xlsx"),
              overwrite = TRUE)
+
+
+# =============================================================================
+# 10.  BOOTSTRAPPING
+# =============================================================================
+
+#Simple Sampler Function
+bootstrap_sample <- function(df, block_col = "encounter_block") {
+  dt <- as.data.table(df)
+  unique_blocks <- unique(dt[[block_col]])
+  n_blocks <- length(unique_blocks)
+  
+  sampled_blocks <- sample(unique_blocks, size = n_blocks, replace = TRUE)
+  
+  lookup <- data.table(
+    original = sampled_blocks,
+    new_id   = seq_along(sampled_blocks)
+  )
+  
+  bootstrap_df <- lookup[dt, on = c(original = block_col), allow.cartesian = TRUE, nomatch = 0]
+  bootstrap_df[, (block_col) := new_id]
+  bootstrap_df[, c("original", "new_id") := NULL]
+  
+  return(as.data.frame(bootstrap_df))
+}
+
+for (sample_i in 1:resample_N) {
+  sample_df <- bootstrap_sample(bin_df)
+  sample_df <- clone_and_weight(sample_df)
+  #Create model (simple regressions)
+  out_boot_df <- rbind(out_boot_df, model_outcomes(sample_df,sample_i,type_reg = "simple"))
+  #Create model (simple regressions)
+  out_boot_df <- rbind(out_boot_df, model_outcomes(sample_df,sample_i,type_reg = "MV"))
+}
+
+# =============================================================================
+# 11.  BOOTSTRAPPING RESULTS
+# =============================================================================
+
+#Calculate differences and odd-ratios
+out_boot_df$VFD_diff <- out_boot_df$VFD_E - out_boot_df$VFD_N
+out_boot_df$VFD_OR <- out_boot_df$VFD_E / out_boot_df$VFD_N
+out_boot_df$ICU_LOS_diff <- out_boot_df$ICU_LOS_E - out_boot_df$ICU_LOS_N
+out_boot_df$ICU_LOS_OR <- out_boot_df$ICU_LOS_E / out_boot_df$ICU_LOS_N
+out_boot_df$dead_hosp_diff <- out_boot_df$dead_hosp_E - out_boot_df$dead_hosp_N
+out_boot_df$dead_hosp_OR <- out_boot_df$dead_hosp_E / out_boot_df$dead_hosp_N
+out_boot_df$dead_30_diff <- out_boot_df$dead_30_E - out_boot_df$dead_30_N
+out_boot_df$dead_30_OR <- out_boot_df$dead_30_E / out_boot_df$dead_30_N
+out_boot_df$dead_365_diff <- out_boot_df$dead_365_E - out_boot_df$dead_365_N
+out_boot_df$dead_365_OR <- out_boot_df$dead_365_E / out_boot_df$dead_365_N
+
+#Divide into the simple and MV models
+boots_simple <- filter(out_boot_df,type == "simple")
+boots_MV <- filter(out_boot_df,type == "MV")
+
+#Function to save results
+save_summary_stats <- function(df, output_path) {
+  # Sort columns alphabetically
+  sorted_cols <- sort(names(df))
+  
+  # Compute summary stats for all numeric columns
+  stats <- do.call(rbind, lapply(sorted_cols, function(col) {
+    x <- df[[col]]
+    
+    if (is.numeric(x)) {
+      x_clean <- x[!is.na(x)]
+      data.frame(
+        Column    = col,
+        Min       = min(x_clean),
+        P1        = quantile(x_clean, 0.01),
+        P5        = quantile(x_clean, 0.05),
+        P25       = quantile(x_clean, 0.25),
+        Median    = median(x_clean),
+        Mean      = mean(x_clean),
+        SD        = sd(x_clean),
+        P75       = quantile(x_clean, 0.75),
+        P95       = quantile(x_clean, 0.95),
+        P99       = quantile(x_clean, 0.99),
+        Max       = max(x_clean),
+        N         = length(x_clean),
+        N_Missing = sum(is.na(x)),
+        row.names = NULL
+      )
+    } else {
+      NULL  # skip non-numeric columns
+    }
+  }))
+  
+  # Create workbook and styled sheet
+  wb <- createWorkbook()
+  addWorksheet(wb, "Summary Statistics")
+  
+  # Header style
+  header_style <- createStyle(
+    fontName    = "Arial",
+    fontSize    = 11,
+    fontColour  = "white",
+    fgFill      = "#2F5496",
+    halign      = "center",
+    border      = "Bottom"
+  )
+  
+  # Body style
+  body_style <- createStyle(
+    fontName  = "Arial",
+    fontSize  = 10,
+    numFmt    = "0.0000",
+    halign    = "right",
+    border    = "TopBottomLeftRight",
+    borderColour = "#D9D9D9"
+  )
+  
+  # Column name style
+  col_style <- createStyle(
+    fontName     = "Arial",
+    fontSize     = 10,
+    fontColour   = "#2F5496",
+    halign       = "left"
+  )
+  
+  # Write data
+  writeData(wb, "Summary Statistics", stats, startRow = 1, startCol = 1, headerStyle = header_style)
+  
+  # Apply styles
+  addStyle(wb, "Summary Statistics", body_style,
+           rows = 2:(nrow(stats) + 1), cols = 2:ncol(stats), gridExpand = TRUE)
+  addStyle(wb, "Summary Statistics", col_style,
+           rows = 2:(nrow(stats) + 1), cols = 1)
+  
+  # Auto-fit column widths
+  setColWidths(wb, "Summary Statistics", cols = 1:ncol(stats), widths = "auto")
+  
+  saveWorkbook(wb, output_path, overwrite = TRUE)
+  message("Saved to: ", output_path)
+}
+
+# Save
+boots_path = file.path(output_folder, "final", "bootstrapped_IPCW_results.xlsx")
+save_summary_stats(boots_simple, boots_path)
+boots_path = file.path(output_folder, "final", "bootstrapped_IPCW_results_multivariate.xlsx")
+save_summary_stats(boots_MV, boots_path)
