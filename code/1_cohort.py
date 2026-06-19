@@ -370,11 +370,18 @@ final_blocks = block_vent_times.merge(_vital_bounds_block, on='encounter_block',
 _bad_block = final_blocks[final_blocks['block_last_vital_dttm'] < final_blocks['block_vent_start_dttm']]
 final_blocks = final_blocks[final_blocks['block_last_vital_dttm'] >= final_blocks['block_vent_start_dttm']]
 strobe_e = {}
-strobe_e['E_blocks_with_vent_end_before_vital_start'] = _bad_block['encounter_block'].nunique()
+strobe_e['E_blocks_with_vital_end_before_vent_start'] = _bad_block['encounter_block'].nunique()
 if len(_bad_block) > 0:
-    log("Warning: Some blocks have last vital < vent start:\n", len(_bad_block))
+    log("Warning: Some blocks have last vital < vent start (REMOVED):\n", strobe_e['E_blocks_with_vital_end_before_vent_start'])
 else:
-    log("There are no bad blocks! Good job CLIF-ing")
+    log("There are no blocks that have last vital < vent start! Good job CLIF-ing")
+#These are not removed since they may still be plausible.
+_bad_block = final_blocks[final_blocks['block_first_vital_dttm'] > final_blocks['block_vent_start_dttm']]
+strobe_e['E_blocks_with_vital_start_after_vent_start'] = _bad_block['encounter_block'].nunique()
+if len(_bad_block) > 0:
+    log("Warning: Some blocks have vent start < vital start(NOT REMOVED):\n", strobe_e['E_blocks_with_vital_start_after_vent_start'])
+else:
+    log("There are no blocks that have vent start < vital start! Good job CLIF-ing")
 
 # 4) Generate the hourly sequence at block level
 def _generate_hourly_sequence_block(_group):
@@ -497,7 +504,7 @@ _cols = ['encounter_block', 'recorded_date', 'recorded_hour', 'time_from_vent']
 _cols += [col for col in final_df_block_raw.columns if col not in _cols]
 final_df_block_raw = final_df_block_raw[_cols]
 
-log("Final hourly blocl shape:", final_df_block_raw.shape)
+log("Final hourly block shape:", final_df_block_raw.shape)
 log("Unique encounter_blocks:", final_df_block_raw['encounter_block'].nunique())
 
 
@@ -544,65 +551,11 @@ log(f"Excluded {len(_blocks_with_trach_at_intubation)} blocks with trach at intu
 log(f"Cohort size in hourly blocks: {strobe_excl['F_final_blocks_without_trach_at_intubation']}")
 
 
-# ### (G) PT consult order
-
-# In[11]:
-
-
-#load (loading from output since key_icu_orders is not a defined table in CLIFpy and we just created it in the prior script
-_pt_df = helper.load_data("clif_folder","clif_key_icu_orders")
-
-#Filter for PT orders only
-_chart_mask = _pt_df["order_category"].isin(['pt_evaluation','pt_treat'])
-_pt_df = _pt_df[_chart_mask]
-
-#Merge with encounter block data
-enc_map = pd.merge(co.encounter_mapping,
-                    block_df[['encounter_block','block_vent_start_dttm']],
-                    on='encounter_block',
-                    how='left')
-_pt_df = _pt_df.merge(enc_map, on='hospitalization_id', how='right').reset_index()
-_pt_df['time_diff'] = _pt_df['order_dttm'] - _pt_df['block_vent_start_dttm']
-
-#PT pre IMV
-pt_pre_imv = _pt_df[_pt_df['time_diff'].dt.total_seconds() < 0]
-pt_pre_imv = pt_pre_imv.groupby('encounter_block')['order_dttm'].agg('max').reset_index()
-pt_pre_imv.rename(columns={'order_dttm':'pt_pre_imv_dttm'}, inplace=True)
-block_df = pd.merge(
-    block_df,
-    pt_pre_imv,
-    on='encounter_block',
-    how='left'
-)
-
-#PT post IMV
-pt_post_imv = _pt_df[_pt_df['time_diff'].dt.total_seconds() >= 0]
-pt_post_imv = pt_post_imv.groupby('encounter_block')['order_dttm'].agg('min').reset_index()
-pt_post_imv.rename(columns={'order_dttm':'pt_post_imv_dttm'}, inplace=True)
-block_df = pd.merge(
-    block_df,
-    pt_post_imv,
-    on='encounter_block',
-    how='left'
-)
-
-'''
-NOTE: We are not fully excluding these blocks from the analytics data set out of interest. We will keep them in the  block_df for now.
-'''
-block_df['pt_pre24_IMV'] = block_df['pt_pre_imv_dttm'].notna() & ((block_df['block_vent_start_dttm'] - block_df['pt_pre_imv_dttm'] ).dt.total_seconds() < 24*3600)
-strobe_excl['X_blocks_with_pt_24h_prior'] = sum( block_df['pt_pre24_IMV'])
-
-del _chart_mask, _pt_df, pt_pre_imv, pt_post_imv
-
-print(f"Block Length: {len(block_df)}")
-print(f"Unique Encounter Block: {block_df['encounter_block'].nunique()}")
-
-
 # ### Save Cohort Sample
 # - Apply filter as noted above
 # - Save progress so far including encounter stitching and cohort sample.
 
-# In[12]:
+# In[11]:
 
 
 #Filter out from final cohort
@@ -610,16 +563,18 @@ _eb_list = final_df_block_clean['encounter_block'].unique().tolist()
 block_df = block_df[block_df['encounter_block'].isin(_eb_list)]
 co.hospitalization.df = co.hospitalization.df[co.hospitalization.df['encounter_block'].isin(_eb_list)]
 co.adt.df = co.adt.df[co.adt.df['encounter_block'].isin(_eb_list)]
-enc_map = enc_map[enc_map['encounter_block'].isin(_eb_list)]
 co.patient.df = co.patient.df[co.patient.df['patient_id'].isin(co.hospitalization.df['patient_id'])]
 
+#Merge with encounter block data
+enc_map = pd.merge(co.encounter_mapping,
+                    block_df[['encounter_block','block_vent_start_dttm']],
+                    on='encounter_block',
+                    how='right')
+enc_map = enc_map[enc_map['encounter_block'].isin(_eb_list)]
+
 #Save progress
-#Add the block_vent_start_dttm to encounter mapping because this is useful for merging data.
-final_df_block_clean['encounter_block'] = final_df_block_clean['encounter_block'].astype(int)
 path = os.path.join(output_folder,'intermediate','block_df_1_creation.parquet')
 block_df.to_parquet(path)
-path = os.path.join(output_folder,'intermediate','encounter_mapping.parquet')
-enc_map.to_parquet(path)
 del path
 
 log(f"01_cohort: FINAL COHORT: Block Length: {len(block_df)}, Encounter Blocks {block_df['encounter_block'].nunique()}")
@@ -636,7 +591,7 @@ log(f"01_cohort: FINAL COHORT: Block Length: {len(block_df)}, Encounter Blocks {
 
 # ### (A) Patient Data
 
-# In[13]:
+# In[12]:
 
 
 _columns_of_interest = ['patient_id','race_category','ethnicity_category','sex_category','death_dttm','language_category']
@@ -649,51 +604,38 @@ for _col in _columns_of_interest:
     log(f"Blocks with {_col} missing: {sum(block_df[_col].isna())}")
 
 
-# ### (B) Admission Data
+# ### (B) Admission & Discharge Data
 # 
-# Unfortunately the CLIF admission_type_category mapping from MIMIC-CLIF does not include whether or not the patient came as an OSH transfer. So we will need to get data direct from MIMIC to determine OSH transfers.
+# Unfortunately the CLIF admission_type_category mapping from MIMIC-CLIF does not include whether or not the patient came as an OSH transfer. So we will need to get data direct from MIMIC to determine OSH transfers if desired.
 
-# In[14]:
+# In[13]:
 
 
 _hosp_df = co.hospitalization.df.copy()
 _hosp_df.rename(columns = {'age_at_admission':'age'}, inplace=True)
+#Sort to organize hospitalization by order of admission_dttm
 _hosp_df = _hosp_df.sort_values(by = ['encounter_block','admission_dttm'])
-_hosp_df = _hosp_df.drop_duplicates(subset = ['encounter_block'], keep='first') #For stitched encounters we are keeping the first set of data as the admission data.
-
-_columns_of_interest = ['encounter_block','admission_dttm','age','admission_type_category']
+#Aggregate each column by the following rules.
+_hosp_df = _hosp_df.groupby('encounter_block').agg({'admission_dttm':'min',
+                                                    'admission_type_category':'first',
+                                                    'age':'min',
+                                                    'discharge_dttm':'max',
+                                                    'discharge_category':'last'}).reset_index()
+#Merge back with block_data
 block_df = pd.merge(block_df,
-                    _hosp_df[_columns_of_interest],
+                    _hosp_df,
                     on='encounter_block',
                     how='left')
 
+_columns_of_interest = ['encounter_block','admission_dttm','age','admission_type_category','discharge_dttm','discharge_category']
 for _col in _columns_of_interest:
     log(f"Blocks with {_col} missing: {sum(block_df[_col].isna())}")
 
 
-# ### (C) Discharge Data
-
-# In[15]:
-
-
-_hosp_df = co.hospitalization.df.copy()
-_hosp_df = _hosp_df.sort_values(by = ['encounter_block','discharge_dttm'])
-_hosp_df = _hosp_df.drop_duplicates(subset = ['encounter_block'], keep='last') #For stitched encounters we are keeping the first set of data as the admission data.
-
-_columns_of_interest = ['encounter_block','discharge_dttm','discharge_category']
-block_df = pd.merge(block_df,
-                    _hosp_df[_columns_of_interest],
-                    on='encounter_block',
-                    how='left')
-
-for _col in _columns_of_interest:
-    log(f"Blocks with {_col} missing: {sum(block_df[_col].isna())}")
-
-
-# ### (D) ADT Data
+# ### (C) ADT Data
 # - ICU in and out time.
 
-# In[16]:
+# In[14]:
 
 
 #Merge with encounter block
@@ -758,11 +700,140 @@ log('ICU types:')
 log(block_df['ICU_type'].value_counts())
 
 
+# ### (D) Check conformity of time columns
+
+# In[15]:
+
+
+# Define all chronological constraints as (earlier, later, description)
+# Using your naming convention from the dataframe
+chronological_checks = [
+    # Admission must come before everything
+    ("admission_dttm", "block_first_vital_dttm",  "first vital before admission"),
+    ("admission_dttm", "icu_in_dttm",              "ICU in before admission"),
+    ("admission_dttm", "block_vent_start_dttm",    "vent start before admission"),
+    ("admission_dttm", "block_vent_end_dttm",      "vent end before admission [SEVERE]"),
+    ("admission_dttm", "icu_out_dttm",             "ICU out before admission"),
+    ("admission_dttm", "death_dttm",               "death before admission [SEVERE]"),
+    ("admission_dttm", "discharge_dttm",           "discharge before admission"),
+    ("admission_dttm", "block_last_vital_dttm",    "last vital before admission"),
+
+    # Middle group must come before end group
+    ("block_first_vital_dttm", "block_last_vital_dttm", "last vital before first vital"),
+    ("block_vent_start_dttm",  "block_vent_end_dttm",   "vent end before vent start"),
+    ("icu_in_dttm",            "icu_out_dttm",          "ICU out before ICU in"),
+    ("icu_in_dttm",            "icu_first_out_dttm",    "ICU first out before ICU in"),
+
+    # Start group must come before end group (cross-bracket)
+    ("block_first_vital_dttm", "discharge_dttm",        "discharge before first vital [SEVERE]"),
+    ("block_first_vital_dttm", "death_dttm",            "death before first vital [SEVERE]"),
+    ("icu_in_dttm",            "discharge_dttm",        "discharge before ICU in"),
+    ("icu_in_dttm",            "death_dttm",            "death before ICU in"),
+    ("block_vent_start_dttm",  "discharge_dttm",        "discharge before vent start"),
+    ("block_vent_start_dttm",  "death_dttm",            "death before vent start"),
+
+    # Vent end / ICU out must come before discharge
+    ("block_vent_end_dttm",    "discharge_dttm",        "discharge before vent end"),
+    ("icu_out_dttm",           "discharge_dttm",        "discharge before ICU out"),
+    ("icu_first_out_dttm",     "icu_out_dttm",          "ICU final out before ICU first out"),
+]
+
+log(f"==== TIME COMFORMITY CHECKS (before) =====")
+for earlier, later, description in chronological_checks:
+    # Only compare rows where both timestamps are non-null
+    mask = block_df[earlier].notna() & block_df[later].notna()
+    violations = (block_df.loc[mask, later] < block_df.loc[mask, earlier]).sum()
+    log(f"Encounter blocks where {description}: {violations}")
+
+old_block_df = block_df.copy()
+
+#Attempt to fix some of the time violations by using first vital and last vital as proxy for admission and discharge
+block_df["admission_dttm"] = block_df[["admission_dttm", "block_first_vital_dttm"]].min(axis=1)
+block_df["discharge_dttm"] = block_df[["discharge_dttm", "block_last_vital_dttm"]].max(axis=1)
+block_df["death_dttm"] = np.where(block_df["death_dttm"].notna(), block_df[["discharge_dttm", "block_last_vital_dttm","death_dttm"]].max(axis=1), np.nan)
+
+log(f"==== TIME COMFORMITY CHECKS (after fix) =====")
+severe_violation_mask = pd.Series(False, index=block_df.index)
+
+for earlier, later, description in chronological_checks:
+    mask = block_df[earlier].notna() & block_df[later].notna()
+    violations = (block_df.loc[mask, later] < block_df.loc[mask, earlier]).sum()
+    log(f"Encounter blocks where {description}: {violations}")
+    
+    if "[SEVERE]" in description:
+        severe_violation_mask |= (mask & (block_df[later] < block_df[earlier]))
+
+log(f"Encounter blocks removed due to SEVERE time violations: {sum(severe_violation_mask)}")
+strobe_excl['X_blocks_with_bad_time_data'] = sum(severe_violation_mask)
+strobe_excl['F_final_blocks_with_good_data'] = block_df['encounter_block'].nunique()
+block_df = block_df[~severe_violation_mask].reset_index(drop=True)
+
+
+# ### (E) PT Consult Orders
+
+# In[16]:
+
+
+#load (loading from output since key_icu_orders is not a defined table in CLIFpy and we just created it in the prior script
+_pt_df = helper.load_data("clif_folder","clif_key_icu_orders")
+
+#Filter for PT orders only
+_chart_mask = _pt_df["order_category"].isin(['pt_evaluation','pt_treat'])
+_pt_df = _pt_df[_chart_mask]
+
+#Merge
+_pt_df = _pt_df.merge(enc_map, on='hospitalization_id', how='right').reset_index()
+_pt_df['time_diff'] = _pt_df['order_dttm'] - _pt_df['block_vent_start_dttm']
+
+#PT pre IMV
+pt_pre_imv = _pt_df[_pt_df['time_diff'].dt.total_seconds() < 0]
+pt_pre_imv = pt_pre_imv.groupby('encounter_block')['order_dttm'].agg('max').reset_index()
+pt_pre_imv.rename(columns={'order_dttm':'pt_pre_imv_dttm'}, inplace=True)
+block_df = pd.merge(
+    block_df,
+    pt_pre_imv,
+    on='encounter_block',
+    how='left'
+)
+
+#PT post IMV
+pt_post_imv = _pt_df[_pt_df['time_diff'].dt.total_seconds() >= 0]
+pt_post_imv = pt_post_imv.groupby('encounter_block')['order_dttm'].agg('min').reset_index()
+pt_post_imv.rename(columns={'order_dttm':'pt_post_imv_dttm'}, inplace=True)
+block_df = pd.merge(
+    block_df,
+    pt_post_imv,
+    on='encounter_block',
+    how='left'
+)
+
+'''
+NOTE: We are not fully excluding these blocks from the analytics data set out of interest. We will keep them in the  block_df for now.
+'''
+block_df['pt_pre24_IMV'] = block_df['pt_pre_imv_dttm'].notna() & ((block_df['block_vent_start_dttm'] - block_df['pt_pre_imv_dttm'] ).dt.total_seconds() < 24*3600)
+strobe_excl['X_blocks_with_pt_24h_prior'] = sum( block_df['pt_pre24_IMV'])
+
+del _chart_mask, _pt_df, pt_pre_imv, pt_post_imv
+
+print(f"Block Length: {len(block_df)}")
+print(f"Unique Encounter Block: {block_df['encounter_block'].nunique()}")
+
+
 # ## Save Data
 
 # In[17]:
 
 
+#Filter out from final cohort
+_eb_list = block_df['encounter_block'].unique().tolist()
+enc_map = enc_map[enc_map['encounter_block'].isin(_eb_list)]
+
+#Save encounter mappings
+path = os.path.join(output_folder,'intermediate','encounter_mapping.parquet')
+enc_map.to_parquet(path)
+del path
+
+#Save Block
 path = os.path.join(output_folder,'intermediate','block_df_1_end.parquet')
 block_df.to_parquet(path)
 log(f"01_cohort: AFTER DATA COLLECTION: Block Length: {len(block_df)}, Encounter Blocks {block_df['encounter_block'].nunique()}")
@@ -797,14 +868,15 @@ _boxes = [
     {"text": f"Encounter blocks receiving IMV\n(n = {strobe_counts['C_imv_encounter_blocks']})", "xy": (0.5, 0.6)},
     {"text": f"Encounter blocks receiving IMV >= 4 hrs\n(n = {strobe_counts['F_blocks_with_vent_4_or_more']})", "xy": (0.5, 0.45)},
     {"text": f"Encounter blocks not on trach\n(n = {strobe_counts['F_final_blocks_without_trach_at_intubation']})", "xy": (0.5, 0.3)},
-    {"text": f"Encounter blocks analyzed\n(n = {strobe_counts['F_final_blocks_without_trach_at_intubation'] - strobe_excl['X_blocks_with_pt_24h_prior']})", "xy": (0.5, 0.15)},
+    {"text": f"Encounter blocks with valid data\n(n = {strobe_counts['F_final_blocks_with_good_data']})", "xy": (0.5, 0.15)},
 ]
 
 _exclusions = [
     {"text": f"Linked hospitalizations\n(n = {strobe_counts['B_stitched_hosp_ids']})", "xy": (0.8, 0.825)},
-    {"text": f"Excluded: Encounters on vent for <4 hrs\n(n = {strobe_counts['D_blocks_with_same_vent_start_end'] + strobe_counts['E_blocks_with_vent_end_before_vital_start'] + strobe_counts['F_blocks_with_vent_less_than_4']})", "xy": (0.8, 0.525)},
+    {"text": f"Excluded: Encounters on vent for <4 hrs\n(n = {strobe_counts['D_blocks_with_same_vent_start_end'] + strobe_counts['E_blocks_with_vital_end_before_vent_start'] + strobe_counts['F_blocks_with_vent_less_than_4']})", "xy": (0.8, 0.525)},
     {"text": f"Excluded: Encounters with Tracheostomy\n(n = {strobe_counts['F_final_blocks_with_trach_at_intubation']})", "xy": (0.8, 0.375)},
-    {"text": f"Excluded: Encounters with PT consult 24 hours\nprior to IMV (n = {strobe_counts['X_blocks_with_pt_24h_prior']})", "xy": (0.8, 0.225)},
+    {"text": f"Excluded: Encounters with bad date-time data (n = {strobe_counts['X_blocks_with_bad_time_data']})", "xy": (0.8, 0.225)},
+    {"text": f"Excluded: Encounters with PT consult 24 hours\nprior to IMV (n = {strobe_counts['X_blocks_with_pt_24h_prior']})", "xy": (0.8, 0.1)},
 ]
 
 # Draw main boxes and arrows

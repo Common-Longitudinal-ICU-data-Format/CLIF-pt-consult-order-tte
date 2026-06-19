@@ -1,5 +1,5 @@
 name,description,covariate,outcome,other
-encounter_block,Identifier,0,0,Identifier
+encounter_block,Identifier,0,0,identifier
 age,Age (years),1,0,
 sex_category,Sex,1,0,
 race_category,Race,1,0,
@@ -29,25 +29,25 @@ Time_first_PT,Time to First PT Order after IMV (hours),0,0,
 pt_ever,PT order ever after IMV,0,0,
 pt_post48_IMV,PT order within 48 hours after IMV,1,0,
 pt_between_ICU_IMV,PT order placed after IMV but before ICU admission,0,0,
-pt_pre24_IMV,PT order within 24 hours prior to IMV,0,0,Exclude this group
+pt_pre24_IMV,PT order within 24 hours prior to IMV,0,0,exclusion
 yellow_time_eligibility,Time to Yellow Eligibility after IMV (hours),0,0,
 yellow_time_eligibility_2h,Time to Yellow Eligibility (2 hours) after IMV (hours),0,0,
 yellow_0_24h_sum,Hours of Yellow Eligibility (0-24 hours),0,0,
-yellow_2h_0_72h,Two Consecutive Hours of Eligibility (0-72 hours),0,0,Subgroup/Sensitivity Analysis
+yellow_2h_0_72h,Two Consecutive Hours of Eligibility (0-72 hours),0,0,
 yellow_ever,Yellow Eligibility Ever,0,0,
 yellow_post48_IMV,Yellow Eligibility within 48 hours after IMV,0,0,
 extubated_at_pt,Extubated at the Time of PT Order,0,0,
 imv_to_end_hours,IMV to Extubation (hours),0,0,
-vent_free_days,Ventilator Free Days (28-day),0,1,Primary outcome
+vent_free_days,Ventilator Free Days (28-day),0,1,negative-binomials
 intubation_count,Total intubation count during hospitalization,0,0,
 reintubation,Reintubation Rate,0,0,
 adm_to_discharge_days,Overall Hospital Length of Stay (days),0,0,
-imv_to_discharge_days,Post-IMV Hospital Length of Stay (days),0,0,
+imv_to_discharge_days,Post-IMV Hospital Length of Stay (days),0,1,
 discharge_category,Discharge Disposition,0,0,
-icu_los_days,ICU Length of Stay (days),0,1,
+icu_los_days,ICU Length of Stay (days),0,1,poisson
+imv_to_death_days,Post-IMV Mortality (days),0,1,
 is_dead,Overall Mortality,0,0,
 is_dead_2,Mortality within 48 hours,0,0,
-is_dead_hosp,Hospital Mortality,0,1,
-is_dead_30,30-day Mortality,0,1,
-is_dead_365,1-year Mortality,0,1,
-imv_to_death_days,IMV to Death (days),0,0,
+is_dead_hosp,Hospital Mortality,0,1,logit
+is_dead_30,30-day Mortality,0,1,logit
+is_dead_365,1-year Mortality,0,1,logit

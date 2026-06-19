@@ -4,26 +4,34 @@
 #
 #   - Stabilized versus unstabilized weights are a togable option for the weighting function.
 #   - For Clone E only, apply the "pt_now" (analogous to Webster et al. "recentstart")
-#     logic when assigning interval weights:
+#     logic when assigning interval weights (also optional and togable):
 #       * pt_now == 1  & uncensored  →  weight = 1 / P(uncensored)
 #       * pt_now == 0  & uncensored  →  weight = 1   (no upweighting needed)
 #       * censored                   →  weight = 0
 #   - For Clone N: interval weight = 1 / P(uncensored) for all uncensored rows
 #     (no pt_now logic; the paper's recentstart only applies to the treatment arm)
 #   - Cumulative weight = product of all interval weights up to and including
-#     the current time bin (matching paper's multiplicative IPCW)
+#     the current time bin.
+#   - Outcome analysis as follows:
+#       * VFD - Zero Inflated Negative Binomials
+#       * ICU LOS - Poisson
+#       * Mortality (hosp, 30d, 1y) - Logistic
+#       * Competing hosp mortality versus discharge alive - Cox PH (WIP)
+#   - Bootstrapping with non-parametric re-sampling with replacement.
 #
 # =============================================================================
 
 # ---- Packages ----------------------------------------------------------------
 packages <- c("tidyverse", "pscl", "ggplot2", "dplyr", "openxlsx",
-              "tibble", "cobalt", "this.path", "glue","data.table")
+              "tibble", "cobalt", "this.path", "glue","data.table",
+              "survival","scales")
 
 installed <- packages %in% rownames(installed.packages())
 if (any(!installed)) install.packages(packages[!installed])
 
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
 library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)
+library(survival); library(scales)
 
 # ---- Paths -------------------------------------------------------------------
 setwd(dirname(this.path()))
@@ -38,7 +46,6 @@ resample_N <- 10 #Effective bootstrapping resamples.
 # =============================================================================
 data <- read.csv(file.path(output_folder, "intermediate",
                            "block_and_time_bins_for_stats.csv"))
-colnames(data)
 
 # ---- Factorise -------------------------------
 fac_vars <- c("sex_category", "race_category", "ethnicity_category",
@@ -65,7 +72,7 @@ tv_vars <- c("heart_rate_mean", "map_mean", "fio2_set_mean", "peep_set_mean",
              "pressor_flag", "paralytics_flag")
 
 # Outcome Variables
-out_vars <- c("vent_free_days","icu_los_days","is_dead_hosp","is_dead_30","is_dead_365")
+out_vars <- c("vent_free_days","icu_los_days","is_dead_hosp","is_dead_30","is_dead_365",'imv_to_discharge_days')
 
 #All covars, used to determine complete case analysis.
 all_covars <- c(base_vars, tv_vars)
@@ -84,9 +91,18 @@ time_bins <- sort(unique(bin_df$time_bin))
 # Censor N: censored from the first PT bin onward (pt_order fills forward)
 bin_df$PT_censor_N <- bin_df$pt_order
 
-# Censore E: censored only at the final bin (bin_end == 48) if PT never occurred
+# Censor E: censored only at the final bin (bin_end == 48) if PT never occurred
 bin_df$pt_post48_IMV = bin_df$pt_post48_IMV == "True"
 bin_df$PT_censor_E <- ifelse((!bin_df$pt_post48_IMV) & bin_df$bin_end == 48, 1, 0)
+
+# ---- Discharge Type for Fine Grey --------------------------------------------
+bin_df$dc_type <- factor(
+  case_when(
+    bin_df$is_dead_hosp == 1 ~ "dead",
+    TRUE                     ~ "alive"
+  ),
+  levels = c("alive", "dead")   # "alive" = censored/competing; "dead" = event
+)
 
 # =============================================================================
 # 2.  COMPLETE-CASE FILTER
@@ -97,11 +113,14 @@ separate_complete_frames <- function(df,
   df_N <- df[complete.cases(df[, vars_needed_N]), ]
   df_N$clone <- factor("N", levels = c("N", "E"))
   df_N <- df_N[order(df_N$encounter_block, df_N$time_bin), ]
+  #Keep uncensored row or rows where the censoring event happens.
+  df_N <- df_N %>% filter( (PT_censor_N = 0) | (pt_now = 1))
 
   vars_needed_E <- c("PT_censor_E", vars_needed)
   df_E <- df[complete.cases(df[, vars_needed_E]), ]
   df_E <- df_E[order(df_E$encounter_block, df_E$time_bin), ]
   df_E$clone <- factor("E", levels = c("N", "E"))
+  #All censoring occurs on the last time_bin so no need to filter.
   
   return(list(clones_N = df_N,clones_E = df_E))
   
@@ -270,7 +289,7 @@ fit_interval_weights <- function(clone_df,
 # =============================================================================
 # 4.  COMBINE STEPS 2 & 3
 # =============================================================================
-all_vars_final <- c("encounter_block","pt_post48_IMV","clone","IPCW", base_vars, out_vars)
+all_vars_final <- c("encounter_block","pt_post48_IMV","clone","IPCW","dc_type", base_vars, out_vars)
 clone_and_weight <- function(bin_data) {
   #Create clone data frames
   clone_frames <- separate_complete_frames(bin_data)
@@ -301,6 +320,7 @@ clone_and_weight <- function(bin_data) {
   out_df <- out_df %>%
     mutate(IPCW_trim = pmin(pmax(IPCW, w_cut[[1]]), w_cut[[2]]))
   
+  out_df$eb_clone <- paste(out_df$encounter_block, out_df$clone, sep="_")
   return(out_df)
 }
 
@@ -413,6 +433,7 @@ out_boot_df <- data.frame(
   dead_30_E  = numeric(),
   dead_365_N = numeric(),
   dead_365_E = numeric(),
+  dead_FG_HR = numeric(),
   stringsAsFactors = FALSE
 )
 #Note that this will store both simple regression and MV regression as well
@@ -457,6 +478,21 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
   ##### 1-year mortality: Binary #####
   fit_dead_365  <<- glm(as.formula(paste("is_dead_365 ~", mv_rhs)),
                           data = sample_df, family = binomial(),  weights = IPCW_trim)
+  #### Hospital mortality: Fine-Grey (against discharge alive) ###
+  data_dead_fg <<- finegray(
+    Surv(imv_to_discharge_days, dc_type) ~.,
+    data = sample_df,
+    etype = "dead",
+    id = sample_df$eb_clone,
+    weights =  sample_df$IPCW_trim
+  )
+  fit_dead_fg <<- coxph(
+    as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~", mv_rhs)),
+    data = data_dead_fg,
+    id = eb_clone,
+    weights = fgwt, #fgwt already incorporated IPCW based on line above.
+    robust = TRUE
+  )
   
   vfd_con       <- standardized_contrast(fit_vfd, sample_df, "vent_free_days")
   icu_con       <- standardized_contrast(fit_icu_los, sample_df, "icu_los_days")
@@ -476,12 +512,88 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
     dead_30_N   = dead_30_con$mean_pred_N,
     dead_30_E   = dead_30_con$mean_pred_E,
     dead_365_N  = dead_365_con$mean_pred_N,
-    dead_365_E  = dead_365_con$mean_pred_E
+    dead_365_E  = dead_365_con$mean_pred_E,
+    dead_FG_HR = exp(coef(fit_dead_fg)["cloneE"])
   )
 }
 
+
 # =============================================================================
-# 9.  RESULTS ORGANISATION
+# 9.  G-Formula Survival Curve
+# Fits original data only, not bootstrapped.
+# Create E and N survival curves using marginal effect.
+# =============================================================================
+plot_gformula_finegray <- function(
+    sample_df,
+    fit,
+    covars = NULL,  # character vector of covariate names used in the model
+    # (excluding 'clone'); NULL for simple model
+    colors = c("N" = "#2E86AB", "E" = "#E74C3C"),
+    title  = "Marginal Cumulative Incidence Curves (G-formula standardisation)"
+) {
+
+  # ── 1. Clone dataset under each treatment arm ──────────────────────────────
+  data_E <- sample_df %>% mutate(clone = factor("E", levels = c("N", "E")))
+  data_N <- sample_df %>% mutate(clone = factor("N", levels = c("N", "E")))
+  
+  # ── 2. Build covariate matrices (must match what was passed to crr's cov1) ──
+  rhs <- if (is.null(covars) || length(covars) == 0) {
+    "~ clone"
+  } else {
+    paste("~", paste(c("clone", covars), collapse = " + "))
+  }
+  cov_formula <- as.formula(rhs)
+  
+  cov_E <- model.matrix(cov_formula, data = data_E)[, -1, drop = FALSE]
+  cov_N <- model.matrix(cov_formula, data = data_N)[, -1, drop = FALSE]
+  
+  # ── 3. Predict individual CIFs and average (standardise) ───────────────────
+  # predict.crr() returns a matrix: column 1 = time, columns 2+ = individual CIFs
+  pred_E <- predict(fit, cov1 = cov_E)
+  pred_N <- predict(fit, cov1 = cov_N)
+  
+  cif_df <- bind_rows(
+    data.frame(time = pred_E[, 1], cif = rowMeans(pred_E[, -1, drop = FALSE]), strata = "E"),
+    data.frame(time = pred_N[, 1], cif = rowMeans(pred_N[, -1, drop = FALSE]), strata = "N")
+  )
+  
+  # Prepend (0, 0) for each stratum so curves start at the origin
+  cif_df <- bind_rows(
+    data.frame(time = 0, cif = 0, strata = c("E", "N")),
+    cif_df
+  ) %>%
+    arrange(strata, time)
+  
+  # ── 4. Plot ────────────────────────────────────────────────────────────────
+  ggplot(cif_df, aes(x = time, y = cif, color = strata)) +
+    geom_step(linewidth = 0.9) +
+    scale_x_continuous(
+      limits = c(0, 30), breaks = seq(0, 30, by = 5),
+      expand = expansion(mult = c(0, 0.02))
+    ) +
+    scale_y_continuous(
+      limits = c(0, NA),
+      labels = scales::label_percent(accuracy = 1),
+      expand = expansion(mult = c(0, 0.02))
+    ) +
+    scale_color_manual(values = colors, name = "Clone") +
+    labs(
+      x       = "Days from IMV",
+      y       = "Cumulative incidence of hospital death",
+      title   = title,
+      caption = "Competing event: discharge alive. Standardised over covariate distribution (g-formula)."
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      legend.position  = "top",
+      panel.grid.minor = element_blank(),
+      plot.title       = element_text(hjust = 0.5, face = "bold"),
+      plot.caption     = element_text(colour = "grey50", size = 9)
+    )
+}
+
+# =============================================================================
+# 10.  RESULTS ORGANISATION
 # Save the regression models for the original data set
 # =============================================================================
 extract_glm_table <- function(fit, model_name) {
@@ -510,6 +622,18 @@ extract_zeroinfl_table <- function(fit, model_name) {
   bind_rows(out_count, out_zero)
 }
 
+extract_finegray_table <- function(fit, model_name) {
+  sm  <- summary(fit)$coefficients
+  out <- as.data.frame(sm)
+  out$term <- rownames(out)
+  rownames(out) <- NULL
+  p_col <- grep("Pr\\(", names(out), value = TRUE)
+  out %>%
+    transmute(model = model_name, component = "main", term = term,
+              estimate = coef, hr = `exp(coef)`, se = `se(coef)`,
+              p_value = .data[[p_col]])
+}
+
 #Create model (simple regressions)
 out_boot_df <- rbind(out_boot_df, model_outcomes(original_analysis_df,"original",type_reg = "simple"))
 
@@ -519,6 +643,7 @@ tab_icu_los  <- extract_glm_table(fit_icu_los,       "icu_los_days")
 tab_dead_hosp<- extract_glm_table(fit_dead_hosp,     "is_dead_hosp")
 tab_dead_30  <- extract_glm_table(fit_dead_30,       "is_dead_30")
 tab_dead_365 <- extract_glm_table(fit_dead_365,      "is_dead_365")
+tab_dead_fg <- extract_finegray_table(fit_dead_fg, "discharge_dead_alive")
 #Save to excel file
 wb <- createWorkbook()
 addWorksheet(wb, "VFD");             writeData(wb, "VFD",              tab_vfd)
@@ -526,9 +651,17 @@ addWorksheet(wb, "ICU_LOS");         writeData(wb, "ICU_LOS",          tab_icu_l
 addWorksheet(wb, "Hosp");            writeData(wb, "Hosp",             tab_dead_hosp)
 addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_30)
 addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
+addWorksheet(wb, "FG");           writeData(wb, "FG",            tab_dead_fg)
 addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", out_boot_df[1,])
 saveWorkbook(wb, file = file.path(output_folder, "final", "ccw_IPCW_results.xlsx"),
              overwrite = TRUE)
+
+#FG plot
+#fg_plot_original <- plot_gformula_finegray(data_dead_fg, fit_dead_fg,
+#                                           covars = NULL,
+#                                           title = "Marginal Mortality CIF Curves (simple))")
+#ggsave(file.path(output_folder, "final", "graphs", "fg_plot_simple.pdf"), fg_plot_original, width = 7, height = 5, dpi = 300)
+
 
 #Create model (MV regressions)
 #Create model (simple regressions)
@@ -540,6 +673,7 @@ tab_icu_los  <- extract_glm_table(fit_icu_los,       "icu_los_days")
 tab_dead_hosp<- extract_glm_table(fit_dead_hosp,     "is_dead_hosp")
 tab_dead_30  <- extract_glm_table(fit_dead_30,       "is_dead_30")
 tab_dead_365 <- extract_glm_table(fit_dead_365,      "is_dead_365")
+tab_dead_fg <- extract_finegray_table(fit_dead_fg, "discharge_dead_alive")
 #Save to excel file
 wb <- createWorkbook()
 addWorksheet(wb, "VFD");             writeData(wb, "VFD",              tab_vfd)
@@ -547,13 +681,19 @@ addWorksheet(wb, "ICU_LOS");         writeData(wb, "ICU_LOS",          tab_icu_l
 addWorksheet(wb, "Hosp");            writeData(wb, "Hosp",             tab_dead_hosp)
 addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_30)
 addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
+addWorksheet(wb, "FG");           writeData(wb, "FG",            tab_dead_fg)
 addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", out_boot_df[2,])
 saveWorkbook(wb, file = file.path(output_folder, "final", "ccw_IPCW_results_multivariate.xlsx"),
              overwrite = TRUE)
 
+#FG plot
+#fg_plot_original <- plot_gformula_finegrat(data_dead_fg, fit_dead_fg,
+#                                           covars = NULL,
+#                                           title = "Marginal Mortality CIF Curves (simple))")
+#ggsave(file.path(output_folder, "final", "graphs", "fg_plot_simple.pdf"), fg_plot_original, width = 7, height = 5, dpi = 300)
 
 # =============================================================================
-# 10.  BOOTSTRAPPING
+# 11.  BOOTSTRAPPING
 # =============================================================================
 
 #Simple Sampler Function
@@ -620,6 +760,7 @@ save_summary_stats <- function(df, output_path) {
         Column    = col,
         Min       = min(x_clean),
         P1        = quantile(x_clean, 0.01),
+        P2_5      = quantile(x_clean, 0.025),
         P5        = quantile(x_clean, 0.05),
         P25       = quantile(x_clean, 0.25),
         Median    = median(x_clean),
@@ -627,6 +768,7 @@ save_summary_stats <- function(df, output_path) {
         SD        = sd(x_clean),
         P75       = quantile(x_clean, 0.75),
         P95       = quantile(x_clean, 0.95),
+        P97_5     = quantile(x_clean, 0.975),
         P99       = quantile(x_clean, 0.99),
         Max       = max(x_clean),
         N         = length(x_clean),

@@ -541,7 +541,7 @@ block_df['pt_between_ICU_IMV'] = block_df['Time_first_PT'] < (-1*block_df['icu_t
 # Add Hospital mortality: TRUE if Death_dttm < discharge_dttm or (discharge category is hospice or dead) 
 block_df["is_dead_hosp"] = (
     (block_df["death_dttm"] <= block_df["discharge_dttm"]) |
-    (block_df["discharge_category"].str.lower().isin(["Hospice", "Expired"]))
+    (block_df["discharge_category"].str.lower().isin(["hospice", "expired"]))
 )
 #48 hour mortality (in grace period)
 block_df['is_dead_2'] = (block_df['death_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds() <= (2*24*60*60)
@@ -680,7 +680,7 @@ helper.missing_summary(block_df,f_name='block_df_3_end')
 # ## Remove obersvations with prior PT order
 # Remove any `encounter_block` from both `block_df` and `time_bin.df` where `pt_pre24_IMV` == `True`.
 
-# In[24]:
+# In[21]:
 
 
 #Exclusion criteria
@@ -689,9 +689,15 @@ block_df = block_df[~block_df['pt_pre24_IMV']]
 time_bin.df = time_bin.df[time_bin.df['encounter_block'].isin(block_df['encounter_block'])]
 
 
+# In[22]:
+
+
+block_df[block_df['discharge_category'].isna() & block_df['discharge_dttm'].isna()].head()
+
+
 # ## Organize Columns and Summarize
 
-# In[22]:
+# In[23]:
 
 
 import scipy.stats as stats
@@ -791,7 +797,7 @@ with open(file_path, mode="w") as file:
 
 # ## CIF Graph
 
-# In[23]:
+# In[24]:
 
 
 import matplotlib.pyplot as plt
@@ -819,7 +825,7 @@ plt.close()
 
 # ## Time Bin Summary Graphs
 
-# In[24]:
+# In[25]:
 
 
 pt_time_bin_df = time_bin.df.groupby('bin_start')['pt_order'].agg('sum').reset_index()
@@ -842,7 +848,7 @@ plt.close()
 # ## Merging for Stats
 # Create a merged block_df and time_bin.df to be used for stats.
 
-# In[25]:
+# In[26]:
 
 
 column_order = column_order.reset_index()
