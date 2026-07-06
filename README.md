@@ -55,10 +55,10 @@ These scripts install the required Python and R dependencies.
 
 | Step | Script | Language | Description |
 |------|--------|----------|-------------|
-| 1 | `01_cohort.py` | Python | File organization, Cohort identification, STROBE diagram |
-| 2 | `02_data_gathering.py` | Python | Gathers and aggregates data from multiple CLIF tables, creates "time_bin" and "hourly" data sets. |
-| 3 | `03_calculations.py` | Python | Mobilization analysis, outcomes definitions, Table 1, setup for Rscript |
-| 4 | `04_ccw.R` | R | Clone censor weight, outcomes models, bootstrapping |
+| 1 | `1_cohort.py` | Python | File organization, Cohort identification, STROBE diagram |
+| 2 | `2_data_gathering.py` | Python | Gathers and aggregates data from multiple CLIF tables, creates "time_bin" and "hourly" data sets. |
+| 3 | `3_calculations.py` | Python | Mobilization analysis, outcomes definitions, Table 1, setup for Rscript |
+| 4 | `4_ccw.R` | R | Clone censor weight, outcomes models, bootstrapping |
 
 ## Output
 
@@ -66,10 +66,14 @@ We want the output saved to `output/final` and `output/logs`.
 
 ## Authors
 
-*Snigdha Jain*
+*Giulio C. Rottaro Castejon*
 
 *Jinping Liang*
 
-*Giulio C. Rottaro Castejon*
+*Haidong Lu*
+
+*Fan Li*
+
+*Snigdha Jain*
 
 Yale University
