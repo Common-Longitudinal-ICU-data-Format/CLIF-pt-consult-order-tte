@@ -1,0 +1,10 @@
+{
+    "site_name":"YOUR SITE NAME",
+    "clif_folder":"your/clif/folder",
+    "mimic":"only/for/mimic",
+    "time_zone":"America/New_York",
+    "file_type":"parquet",
+    "time_bin_size":12,
+    "time_end":48
+}
+    

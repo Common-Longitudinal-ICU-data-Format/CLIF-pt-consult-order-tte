@@ -8,8 +8,9 @@ code/__pycache__/
 # C extensions
 *.so
 
-#Environment
-cpttenv/
+#R Environment
+code/initialize_renv.R
+renv/
 
 # Jupyter checkpoint
 .ipynb_checkpoints
@@ -19,6 +20,9 @@ config/.ipynb_checkpoints
 # MY OWN FOLDERS TO IGNORE
 _Old Scripts/
 _Side Projects/
+
+# Config file
+config/config.json
 
 # Output of code
 output/

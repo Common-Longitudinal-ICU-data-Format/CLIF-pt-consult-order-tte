@@ -32,82 +32,38 @@ log "Log: ${LOG_FILE}"
 log ""
 
 # ── environment (uv) ─────────────────────────────────────────────────────────
-REQUIREMENTS_FILE="${1:-requirements.txt}"
-ENV_NAME="${2:-cpttenv}"
- 
-# ── Checks ────────────────────────────────────────────────────
- 
-if ! command -v python3 &>/dev/null; then
-  log " python3 not found. Please install Python 3 first."
-  return 1 2>/dev/null || exit 1
+if ! command -v uv >/dev/null 2>&1; then
+  log "${RED}uv not found. Install it: https://docs.astral.sh/uv/getting-started/installation/${RESET}"
+  exit 1
 fi
- 
-if [ ! -f "$REQUIREMENTS_FILE" ]; then
-  log "XX  Requirements file '$REQUIREMENTS_FILE' not found."
-  log "    Usage: source setup_env.sh [requirements_file] [env_name]"
-  return 1 2>/dev/null || exit 1
-fi
- 
-# ── Create virtual environment ────────────────────────────────
- 
-if [ -d "$ENV_NAME" ]; then
-  log "!!   Virtual environment '$ENV_NAME' already exists — skipping creation."
-else
-  log "   Creating virtual environment '$ENV_NAME'..."
-  python3 -m venv "$ENV_NAME"
-  if [ $? -ne 0 ]; then
-    log "XX  Failed to create virtual environment."
-    return 1 2>/dev/null || exit 1
-  fi
-  log "   Virtual environment created."
-fi
- 
-# ── Activate ──────────────────────────────────────────────────
- 
-log "   Activating '$ENV_NAME'..."
- 
-# Detect OS and pick the right activation script
-if [ -f "$ENV_NAME/bin/activate" ]; then
-  source "$ENV_NAME/bin/activate"          # macOS / Linux
-elif [ -f "$ENV_NAME/Scripts/activate" ]; then
-  source "$ENV_NAME/Scripts/activate"      # Windows (Git Bash / WSL)
-else
-  log "   Could not find activation script in '$ENV_NAME'."
-  return 1 2>/dev/null || exit 1
-fi
- 
-log "   Environment activated: $(which python)"
- 
-# ── Install dependencies ──────────────────────────────────────
- 
-log "   Installing packages from '$REQUIREMENTS_FILE'..."
-pip install -r "$REQUIREMENTS_FILE"
- 
-if [ $? -eq 0 ]; then
-  log ""
-  log "   All done! Environment '$ENV_NAME' is active and ready."
-  log "    Python : $(python --version)"
-  log "    Pip    : $(pip --version)"
-  log ""
-  log "    To deactivate later, run: deactivate"
-else
-  log "   Some packages failed to install. Check the output above."
-  return 1 2>/dev/null || exit 1
-fi
+
+log "Syncing dependencies with uv..."
+uv sync --project "${PROJECT_ROOT}" 2>&1 | tee -a "$LOG_FILE"
+log "${GREEN}Environment ready${RESET}"
+log ""
 
 # ── pipeline (cwd = code/ so relative paths work) ───────────────────────────
 cd "${PROJECT_ROOT}/code"
 
 # Python steps
 log "========== STARTING STEP 1: COHORT =========="
-python3 1_cohort.py
+uv run python 1_cohort.py
+log "Step 1: Cohort ran"
 log "========== STARTING STEP 2: DATA GATHERING =========="
-python3 2_data_gathering.py
-log "========== STARTING STEP 3: DATA GATHERING =========="
-python3 3_calculations.py
+uv run python 2_data_gathering.py
+log "Step 2: Data Gathering ran"
+log "========== STARTING STEP 3: CALCULATIONS =========="
+uv run python 3_calculations.py
+log "Step 3: Calculations ran"
 
-# R step
-R -f 4_ccw.R
+# R steps
+if command -v Rscript >/dev/null 2>&1; then
+  run_step "04 CCW"       Rscript --vanilla 4_ccw.R
+  log "Step 4: CCW ran"
+else
+  log "${YELLOW}Rscript not found — skipping R analysis.${RESET}"
+  log "${YELLOW}Run manually: cd code && Rscript 4_ccw.R${RESET}"
+fi
 
 log ""
 log "Output files in ${PROJECT_ROOT}/output/final/:"

@@ -2,9 +2,10 @@
 # 4_ccw_MV_revised.R
 # Clone-Censor Weighting (CCW) implementation
 #
-#   - Stabilized versus unstabilized weights are a togable option for the weighting function.
+#   - Stabilized versus unstabilized weights. (optional)
+#   - Calculate weight by time_bin OR using time_bin as a factor (optional)
 #   - For Clone E only, apply the "pt_now" (analogous to Webster et al. "recentstart")
-#     logic when assigning interval weights (also optional and togable):
+#     logic when assigning interval weights (also optional):
 #       * pt_now == 1  & uncensored  →  weight = 1 / P(uncensored)
 #       * pt_now == 0  & uncensored  →  weight = 1   (no upweighting needed)
 #       * censored                   →  weight = 0
@@ -16,7 +17,7 @@
 #       * VFD - Zero Inflated Negative Binomials
 #       * ICU LOS - Poisson
 #       * Mortality (hosp, 30d, 1y) - Logistic
-#       * Competing hosp mortality versus discharge alive - Cox PH (WIP)
+#       * Competing hosp mortality versus discharge alive - FineGrey
 #   - Bootstrapping with non-parametric re-sampling with replacement.
 #
 # =============================================================================
@@ -38,14 +39,19 @@ setwd(dirname(this.path()))
 work_dir      <- normalizePath("..")
 output_folder <- file.path(work_dir, "output")
 
-#-----Bootstrapping Samples ----------------------------------------------------
-resample_N <- 10 #Effective bootstrapping resamples.
+#----- Options -----------------------------------------------------------------
+resample_N <- 100 #Effective bootstrapping resamples.
+input_file_path <- file.path(output_folder, "intermediate",
+                             "block_and_time_bins_for_stats.csv")
+use_recent_start_logic <- FALSE
+use_stabilized_weights <- FALSE
+use_time_bin_factor <- FALSE
+label <- "TR" #Additional label to append at the end of output files.
 
 # =============================================================================
 # 1.  LOAD & PREP DATA
 # =============================================================================
-data <- read.csv(file.path(output_folder, "intermediate",
-                           "block_and_time_bins_for_stats.csv"))
+data <- read.csv(input_file_path)
 
 # ---- Factorise -------------------------------
 fac_vars <- c("sex_category", "race_category", "ethnicity_category",
@@ -126,7 +132,7 @@ separate_complete_frames <- function(df,
   
 }
 # =============================================================================
-# 3.  PER-TIME-BIN WEIGHTING  (Webster-Clark approach)
+# 3a.  PER-TIME-BIN WEIGHTING  (Webster-Clark approach)
 #
 #  For each unique time_bin t:
 #    a) Subset rows that are "active" at time t  (the row for that bin)
@@ -287,6 +293,110 @@ fit_interval_weights <- function(clone_df,
 }
 
 # =============================================================================
+# 3b.  TIME-BIN AS A FACTOR WEIGHTING
+#
+#  One single regression using time_bin as a factorized variable.
+#
+# =============================================================================
+fit_interval_weights_factor <- function(clone_df,
+                                 censor_col,   # "PT_censor_N" or "PT_censor_E"
+                                 pt_now_logic = FALSE,
+                                 stabilize = FALSE) {
+  # pt_now_logic = TRUE  → Clone E weighting (use pt_now flag)
+  # pt_now_logic = FALSE → Clone N weighting (always 1/p_uncens when uncensored)
+  
+  #Factorize time_bin
+  clone_df$time_bin <- as.factor(clone_df$time_bin)
+  
+  #Probability of censoring formula
+  rhs_formula <- paste(c("time_bin", base_vars, tv_vars), collapse = " + ")
+  form        <- as.formula(paste(censor_col, "~", rhs_formula))
+  
+  # Stabilized weights formula
+  rhs_stab <- paste(c(base_vars), collapse = " + ")
+  form_stab <- as.formula(paste(censor_col, "~", rhs_stab))
+  
+  # Fit the GLM
+  # Response: P(censored at t)  — following Webster-Clark's formulation
+  fit <- tryCatch(
+    glm(form, data = clone_df, family = binomial(link = "logit")),
+    error = function(e) {
+      message(sprintf("GLM failed for time_bin %d (%s) probability. Defaulting to raw mean.",
+                      tb, censor_col))
+      NULL
+    }
+  )
+  
+  clone_df$p_cens   <- predict(fit, newdata = clone_df, type = "response")
+  clone_df$p_uncens <- 1 - clone_df$p_cens
+  
+  #STABILIZATION STEP
+  if (stabilize) {
+    # Fit the GLM for baseline variables
+    # Response: P(censored at t)  — using fix covariates only
+    fit <- tryCatch(
+      glm(form_stab, data = clone_df, family = binomial(link = "logit")),
+      error = function(e) {
+        message(sprintf("GLM failed for time_bin %d (%s) stabilization numerator. Defaulting to raw mean.",
+                        tb, censor_col))
+        NULL
+      }
+    )
+    clone_df$p_stab   <- 1 - predict(fit, newdata = clone_df, type = "response")
+  } else {
+    clone_df$p_stab <- 1
+  }
+  
+  # ---- Assign interval weight ----------------------------------------------
+  if (!pt_now_logic) {
+    # ---- Clone N ------------------------------------------------------------
+    # Uncensored rows: weight = 1 / P(uncensored)
+    # Censored rows:   weight = 0
+    clone_df$interval_wt <- ifelse(
+      clone_df[[censor_col]] == 0,
+      clone_df$p_stab / clone_df$p_uncens,
+      0
+    )
+  } else {
+    # ---- Clone E (Webster-Clark recentstart logic) --------------------------
+    # pt_now == 1 & uncensored: patient *just* started PT this bin.
+    #   They could only plausibly remain in the study because they happened to
+    #   start — upweight them by 1/P(uncensored).
+    # pt_now == 0 & uncensored: patient did not start PT this bin.
+    #   They are following the expected trajectory; weight = 1.
+    # censored (regardless of pt_now): weight = 0.
+    clone_df$interval_wt <- case_when(
+      clone_df[[censor_col]] == 1              ~  0,                         # censored → 0
+      clone_df[[censor_col]] == 0 & clone_df$pt_now == 1 ~ clone_df$p_stab / clone_df$p_uncens,  # just started PT → upweight
+      clone_df[[censor_col]] == 0 & clone_df$pt_now == 0 ~ 1,               # not yet started, still in study → 1
+      TRUE                                     ~  NA_real_
+    )
+  }
+  
+  # ---- Cumulative product of interval weights per encounter ------------------
+  # This matches Webster-Clark's final multiplicative IPCW.
+  # We use ave() with cumprod, which respects the ordering within each group.
+  clone_df$IPCW <- ave(
+    clone_df$interval_wt,
+    clone_df$encounter_block,
+    FUN = cumprod
+  )
+  
+  # Note we make this sample a global variable so we can review
+  # results from outside the function.
+  sample_df <<- clone_df
+  
+  #Make final weights for all clones by encounter block
+  clone_df <- clone_df %>%
+    group_by(encounter_block) %>%
+    slice_tail(n = 1) %>%                        # last observed bin
+    filter(!!sym(censor_col) == 0) %>%           # must be uncensored at exit
+    ungroup()
+  
+  return(clone_df)
+}
+
+# =============================================================================
 # 4.  COMBINE STEPS 2 & 3
 # =============================================================================
 all_vars_final <- c("encounter_block","pt_post48_IMV","clone","IPCW","dc_type", base_vars, out_vars)
@@ -294,22 +404,42 @@ clone_and_weight <- function(bin_data) {
   #Create clone data frames
   clone_frames <- separate_complete_frames(bin_data)
   
-  #Give them weights
-  clone_frames$clones_N <- fit_interval_weights(
-    clone_df     = clone_frames$clones_N,
-    censor_col   = "PT_censor_N",
-    pt_now_logic = FALSE,
-    stabilize = FALSE
-  )
-  weights_N <<- sample_df #This is for analysis later of the original data set only.
-  
-  clone_frames$clones_E <- fit_interval_weights(
-    clone_df     = clone_frames$clones_E,
-    censor_col   = "PT_censor_E",
-    pt_now_logic = FALSE,
-    stabilize = FALSE
-  )
-  weights_E <<- sample_df #This is for analysis later of the original data set only.
+  #time_bin as a factor uses a different formula
+  if (use_time_bin_factor) {
+    #Give them weights
+    clone_frames$clones_N <- fit_interval_weights_factor(
+      clone_df     = clone_frames$clones_N,
+      censor_col   = "PT_censor_N",
+      pt_now_logic = FALSE,
+      stabilize = use_stabilized_weights
+    )
+    weights_N <<- sample_df #This is for analysis later of the original data set only.
+    
+    clone_frames$clones_E <- fit_interval_weights_factor(
+      clone_df     = clone_frames$clones_E,
+      censor_col   = "PT_censor_E",
+      pt_now_logic = use_recent_start_logic,
+      stabilize = use_stabilized_weights
+    )
+    weights_E <<- sample_df #This is for analysis later of the original data set only.
+  } else {
+    #Give them weights
+    clone_frames$clones_N <- fit_interval_weights(
+      clone_df     = clone_frames$clones_N,
+      censor_col   = "PT_censor_N",
+      pt_now_logic = FALSE,
+      stabilize = use_stabilized_weights
+    )
+    weights_N <<- sample_df #This is for analysis later of the original data set only.
+    
+    clone_frames$clones_E <- fit_interval_weights(
+      clone_df     = clone_frames$clones_E,
+      censor_col   = "PT_censor_E",
+      pt_now_logic = use_recent_start_logic,
+      stabilize = use_stabilized_weights
+    )
+    weights_E <<- sample_df #This is for analysis later of the original data set only.
+  }
   
   #Create one large analytic cohort
   out_df <- bind_rows(clone_frames$clones_N, clone_frames$clones_E)
@@ -368,7 +498,7 @@ p_ipcw_time <- ggplot(ipcw_long, aes(x = time_bin_f, y = IPCW, fill = clone)) +
   theme_bw() +
   labs(title = "Trajectory of Unstabilized IPCW Over Time",
        x = "Time bin", y = "Unstabilized IPCW", fill = "Clone")
-ggsave(file.path(output_folder, "final", "graphs", "original_IPCW_trajectory.pdf"),
+ggsave(file.path(output_folder, "final", "graphs", paste("original_IPCW_trajectory",label,".pdf")),
        plot = p_ipcw_time, width = 8, height = 5)
 
 p_ipcw_time1 <- ggplot(ipcw_long, aes(x = time_bin_f, y = IPCW_trim, fill = clone)) +
@@ -377,7 +507,7 @@ p_ipcw_time1 <- ggplot(ipcw_long, aes(x = time_bin_f, y = IPCW_trim, fill = clon
   theme_bw() +
   labs(title = "Trajectory of Trimmed Unstabilized IPCW Over Time",
        x = "Time bin", y = "Trimmed Unstabilized IPCW", fill = "Clone")
-ggsave(file.path(output_folder, "final", "graphs", "trim_IPCW_trajectory.pdf"),
+ggsave(file.path(output_folder, "final", "graphs", paste("trim_IPCW_trajectory",label,".pdf")),
        plot = p_ipcw_time1, width = 8, height = 5)
 
 #Final Weights Plot
@@ -386,7 +516,7 @@ g <- ggplot(original_analysis_df, aes(x = IPCW, fill = clone)) +
   theme_bw() +
   labs(title = "Distribution of final weights by clone",
        x = "Final weight", y = "Count", fill = "Clone Group")
-ggsave(file.path(output_folder, "final", "graphs", "original_final_IPCW.pdf"),
+ggsave(file.path(output_folder, "final", "graphs", paste("original_final_IPCW",label,".pdf")),
        plot = g, width = 7, height = 5)
 
 g1 <- ggplot(original_analysis_df, aes(x = IPCW_trim, fill = clone)) +
@@ -394,7 +524,7 @@ g1 <- ggplot(original_analysis_df, aes(x = IPCW_trim, fill = clone)) +
   theme_bw() +
   labs(title = "Distribution of trimmed final weights by clone",
        x = "Final weight", y = "Count", fill = "Clone Group")
-ggsave(file.path(output_folder, "final", "graphs", "trim_final_IPCW.pdf"),
+ggsave(file.path(output_folder, "final", "graphs", paste("trim_final_IPCW",label,".pdf")),
        plot = g1, width = 7, height = 5)
 
 
@@ -412,7 +542,7 @@ p_balance <- love.plot(bal_ccw, stats = "mean.diffs", abs = TRUE,
                        stars = "raw", sample.names = c("Unweighted", "Weighted"),
                        title = "Baseline Covariate Balance Before and After IPCW")
 print(p_balance)
-ggsave(file.path(output_folder, "final", "graphs", "balance_plot_IPCW.pdf"),
+ggsave(file.path(output_folder, "final", "graphs", paste("balance_plot_IPCW",label,".pdf")),
        plot = p_balance, width = 8, height = 6)
 
 # =============================================================================
@@ -653,7 +783,7 @@ addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_
 addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
 addWorksheet(wb, "FG");           writeData(wb, "FG",            tab_dead_fg)
 addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", out_boot_df[1,])
-saveWorkbook(wb, file = file.path(output_folder, "final", "ccw_IPCW_results.xlsx"),
+saveWorkbook(wb, file = file.path(output_folder, "final", paste("ccw_IPCW_results",label,".xlsx")),
              overwrite = TRUE)
 
 #FG plot
@@ -683,14 +813,14 @@ addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_
 addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
 addWorksheet(wb, "FG");           writeData(wb, "FG",            tab_dead_fg)
 addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", out_boot_df[2,])
-saveWorkbook(wb, file = file.path(output_folder, "final", "ccw_IPCW_results_multivariate.xlsx"),
+saveWorkbook(wb, file = file.path(output_folder, "final", paste("ccw_IPCW_results_multivariate",label,".xlsx")),
              overwrite = TRUE)
 
 #FG plot
 #fg_plot_original <- plot_gformula_finegrat(data_dead_fg, fit_dead_fg,
 #                                           covars = NULL,
 #                                           title = "Marginal Mortality CIF Curves (simple))")
-#ggsave(file.path(output_folder, "final", "graphs", "fg_plot_simple.pdf"), fg_plot_original, width = 7, height = 5, dpi = 300)
+#ggsave(file.path(output_folder, "final", "graphs", paste("fg_plot_simple",paste,".pdf")), fg_plot_original, width = 7, height = 5, dpi = 300)
 
 # =============================================================================
 # 11.  BOOTSTRAPPING
@@ -723,6 +853,7 @@ for (sample_i in 1:resample_N) {
   out_boot_df <- rbind(out_boot_df, model_outcomes(sample_df,sample_i,type_reg = "simple"))
   #Create model (simple regressions)
   out_boot_df <- rbind(out_boot_df, model_outcomes(sample_df,sample_i,type_reg = "MV"))
+  print(paste("Completed resample ", sample_i))
 }
 
 # =============================================================================
@@ -829,7 +960,7 @@ save_summary_stats <- function(df, output_path) {
 }
 
 # Save
-boots_path = file.path(output_folder, "final", "bootstrapped_IPCW_results.xlsx")
+boots_path = file.path(output_folder, "final", paste("bootstrapped_IPCW_results",label,".xlsx"))
 save_summary_stats(boots_simple, boots_path)
-boots_path = file.path(output_folder, "final", "bootstrapped_IPCW_results_multivariate.xlsx")
+boots_path = file.path(output_folder, "final", paste("bootstrapped_IPCW_results_multivariate",label,".xlsx"))
 save_summary_stats(boots_MV, boots_path)

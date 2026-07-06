@@ -1,10 +1,16 @@
-# PT Consult Order Target Trial Emulation
-- Using [MIMIC IV Database](https://physionet.org/content/mimiciv/3.1/)
-- Converted to [CLIF Format](https://github.com/Common-Longitudinal-ICU-data-Format/CLIF-MIMIC)
-- With early mobilization critaria algorithm taken from [Eligibility for Mobilization Algorithm](https://github.com/Common-Longitudinal-ICU-data-Format/CLIF-eligibility-for-mobilization/tree/main)
-- Should work with generalized CLIF data with the tables required below.
+# Early PT Consult Order Target Trial Emulation Project
 
-## Required CLIF Tables
+## CLIF VERSION
+2.1.0
+
+
+## Objective
+
+- Determine the effect of early PT consults on ICU outcomes for mechanically ventilated adults. Early is defined as within 48 hours of invasive mechanical ventilation or ICU admission (if transferred already intubated).  
+- Created using [MIMIC IV Database](https://physionet.org/content/mimiciv/3.1/) converted to [CLIF Format](https://github.com/Common-Longitudinal-ICU-data-Format/CLIF-MIMIC)
+- With early mobilization critaria algorithm taken from [Eligibility for Mobilization Algorithm](https://github.com/Common-Longitudinal-ICU-data-Format/CLIF-eligibility-for-mobilization/tree/main)
+
+## Required CLIF tables and fields
 
 1. **patient**: `patient_id`, `race_category`, `ethnicity_category`, `sex_category`, `death_dttm`
 2. **hospitalization**: `patient_id`, `hospitalization_id`, `admission_dttm`, `discharge_dttm`,`admission_category`,`discharge_category`, `age_at_admission`
@@ -20,23 +26,39 @@
    - `assessment_category` = 'braden_mobility', 'RASS', 'cam_total', 'gcs_total',
 10. **key_icu_orders**: `hospitalization_id`,'order_dttm', 'order_category'
 
-## Running Pipeline
+## Cohort Identification
 
-1. **Requires**: `Python` and `R`. The Jupyter notebooks are converted to just Python so Jupyter itself is not required. Uses Python environments for dependencies.
+- Adults (age >= 18)
+- On invasive mechanical ventiulation for at least 4 hours.
+- Without a tracheostomy.
+- Without a PT consult order in 24 hours prior to intubation.
 
-2. **Download This Repository**
+## Detailed Instructions for running the project
 
-3. **Update Config**:
+### 1. Requirements
+The project requires **Python 3.11+** with `uv` installed and **R 4.x**. The Jupyter notebooks are converted to just Python so Jupyter itself is not required. Uses `UV` and `renv`, respectively, for dependencies.
 
-- Open `config/config.json`
-- Fill out the site_name, clif_folder path and time_zone. A MIMIC folder path will only be used if the site name string contains mimic (ie. MIMIC-CLIF)
-- `time_bin_size` and `time_end` should be 12 and 48 respectively but they are included in the configuration to be customized if needed.
+### 2. Download This Repository
 
-4. **Run Script**: Run the entire pipeline using the commands.
+### 3. Update Config:
+
+Follow the instructions in [`config/README.md`](config/README.md) to set your site name, the path to your CLIF tables, the file type, and the time zone.
+
+### 4. Run Pipeline
+Run the entire pipeline using the commands.
 ```
 chmod +x run_pipeline.sh   # make it executable (one time only)
 source run_pipeline.sh
 ```
+These scripts install the required Python and R dependencies.
+### Pipeline steps
+
+| Step | Script | Language | Description |
+|------|--------|----------|-------------|
+| 1 | `01_cohort.py` | Python | File organization, Cohort identification, STROBE diagram |
+| 2 | `02_data_gathering.py` | Python | Gathers and aggregates data from multiple CLIF tables, creates "time_bin" and "hourly" data sets. |
+| 3 | `03_calculations.py` | Python | Mobilization analysis, outcomes definitions, Table 1, setup for Rscript |
+| 4 | `04_ccw.R` | R | Clone censor weight, outcomes models, bootstrapping |
 
 ## Output
 
