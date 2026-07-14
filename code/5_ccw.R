@@ -23,9 +23,15 @@
 # =============================================================================
 
 # ---- Packages ----------------------------------------------------------------
+if (!requireNamespace("this.path", quietly = TRUE)) install.packages("renv")
+library(this.path)
+setwd(dirname(this.path()))
+work_dir      <- normalizePath("..")
+if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
+renv::load(project = work_dir)
+
 packages <- c("tidyverse", "pscl", "ggplot2", "dplyr", "openxlsx",
-              "tibble", "cobalt", "this.path", "glue","data.table",
-              "survival","scales")
+              "tibble","cobalt","glue","data.table","survival","scales")
 
 installed <- packages %in% rownames(installed.packages())
 if (any(!installed)) install.packages(packages[!installed])
@@ -71,7 +77,7 @@ data$is_dead_365    <- ifelse(data$is_dead_365   == "True", 1, 0)
 # ---- Covariate lists & Ordering ----------------------------------------------
 # Fixed (baseline) covariates — same as before
 base_vars <- c("age", "sex_category", "race_category", "ethnicity_category",
-               "weight_kg", "language_category","elixhauser_age_adj","ICU_type")
+               "weight_kg", "language_category","elixhauser","ICU_type")
 
 # Time-varying covariates measured at each time_bin
 tv_vars <- c("heart_rate_mean", "map_mean", "fio2_set_mean", "peep_set_mean",

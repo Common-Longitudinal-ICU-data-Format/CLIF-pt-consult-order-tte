@@ -6,7 +6,8 @@
 #    1. Python  01_cohort.ipynb -> Python
 #    2. Python  02_data_gathering.ipynb -> Python
 #    3. Python  03_calculations.ipynb -> Python
-#    4. R       04_ccw.R
+#    4. R       04_table_one.R
+#    5. R       05_ccw.R
 #
 #  Usage:  bash run_pipeline.sh
 # ════════════════════════════════════════════════════════════════════════════════
@@ -39,13 +40,12 @@ fi
 
 log "Syncing dependencies with uv..."
 uv sync --project "${PROJECT_ROOT}" 2>&1 | tee -a "$LOG_FILE"
-log "${GREEN}Environment ready${RESET}"
+log "${GREEN}uv environment ready${RESET}"
 log ""
 
-# ── pipeline (cwd = code/ so relative paths work) ───────────────────────────
+# ── python pipeline (cwd = code/ so relative paths work) ──────────────────────
 cd "${PROJECT_ROOT}/code"
 
-# Python steps
 log "========== STARTING STEP 1: COHORT =========="
 uv run python 1_cohort.py
 log "Step 1: Cohort ran"
@@ -56,15 +56,20 @@ log "========== STARTING STEP 3: CALCULATIONS =========="
 uv run python 3_calculations.py
 log "Step 3: Calculations ran"
 
-# R steps
-if command -v Rscript >/dev/null 2>&1; then
-  run_step "04 CCW"       Rscript --vanilla 4_ccw.R
-  log "Step 4: CCW ran"
+# ── environment (renv) ─────────────────────────────────────────────────────────
+if ! command -v Rscript >/dev/null 2>&1; then
+  log "${RED}Rscript not found. Run steps 4 & 5 manualy"
+  exit 1
 else
-  log "${YELLOW}Rscript not found — skipping R analysis.${RESET}"
-  log "${YELLOW}Run manually: cd code && Rscript 4_ccw.R${RESET}"
-fi
+    log "========== STARTING STEP 4: Table One =========="
+    Rscript --vanilla 4_table_one.R
+    log "Step 4: Table One ran"
+    log "========== STARTING STEP 5: CCW =========="
+    Rscript --vanilla 5_ccw.R
+    log "Step 5: CCW ran"
 
+
+# ── output files ──────────────────────────────────────────────────────────────
 log ""
 log "Output files in ${PROJECT_ROOT}/output/final/:"
 if [ -d "${PROJECT_ROOT}/output/final" ]; then
