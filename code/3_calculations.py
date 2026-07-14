@@ -58,7 +58,7 @@ with open(os.path.join(work_dir,'config','config.json'), 'r') as file:
     config = json.load(file)
 
 #Load block data CLIF-Eligibility-for-mobilization output
-block_df = helper.load_data('output_folder','block_df_2_end',folder='intermediate')
+block_df = helper.load_data('output_folder','block_df_2_aggregated',folder='intermediate')
 
 #Load Time Bin Object
 time_bin = helper.time_bins(in_name='time_bin_step_2')
@@ -670,17 +670,10 @@ log("DISCHARGE POST:")
 log(block_df['discharge_category'].value_counts(dropna=False))
 
 
-# In[20]:
-
-
-#Column check point
-helper.missing_summary(block_df,f_name='block_df_3_end')
-
-
 # ## Remove obersvations with prior PT order
 # Remove any `encounter_block` from both `block_df` and `time_bin.df` where `pt_pre24_IMV` == `True`.
 
-# In[21]:
+# In[20]:
 
 
 #Exclusion criteria
@@ -689,175 +682,14 @@ block_df = block_df[~block_df['pt_pre24_IMV']]
 time_bin.df = time_bin.df[time_bin.df['encounter_block'].isin(block_df['encounter_block'])]
 
 
-# In[22]:
+# ## Save
+
+# In[21]:
 
 
-block_df[block_df['discharge_category'].isna() & block_df['discharge_dttm'].isna()].head()
-
-
-# ## Organize Columns and Summarize
-
-# In[23]:
-
-
-import scipy.stats as stats
-
-column_order = pd.read_csv(os.path.join("..","config","column_def.csv"))
-my_cols = column_order['name'].tolist()
-column_order = column_order.set_index('name')
-
-block_df = block_df[my_cols]
-path = os.path.join(output_folder,'intermediate',"block_for_stats.parquet")
+#Save
+path = os.path.join(output_folder,'intermediate',"block_df_3_end.parquet")
 block_df.to_parquet(path)
-path = os.path.join(output_folder, 'intermediate',"block_for_stats.csv")
-block_df.to_csv(path)
-del path
-
-#Convert outcome to a categorical column
-early_col = "pt_post48_IMV"
-block_df["early_PT"] = np.where(block_df[early_col], "early_PT", "no_early_PT")
-n_total = block_df["encounter_block"].count()
-n_early = block_df[early_col].sum()
-n_not = n_total - n_early
-
-#SMD calculator function
-def calculate_smd(group1, group2):
-    # Calculate means
-    mean1 = np.mean(group1)
-    mean2 = np.mean(group2)
-    
-    # Calculate variances
-    var1 = np.var(group1, ddof=1)
-    var2 = np.var(group2, ddof=1)
-    
-    # Calculate sample sizes
-    n1 = len(group1)
-    n2 = len(group2)
-    
-    # Calculate Pooled Standard Deviation
-    # s_p = sqrt(((n1-1)*var1 + (n2-1)*var2) / (n1+n2-2))
-    pooled_sd = np.sqrt(((n1 - 1) * var1 + (n2 - 1) * var2) / (n1 + n2 - 2))
-    
-    # Calculate Cohen's d
-    smd = (mean1 - mean2) / pooled_sd
-    return smd
-
-file_path = os.path.join(output_folder,'final',"table1.csv")
-if os.path.exists(file_path):
-    os.remove(file_path)
-
-with open(file_path, mode="w") as file:
-    file.write(f",,Overall,Early PT, No Early PT, P-value/SMD, Missing")
-    for col in my_cols:
-        lab = column_order.loc[col,"description"]
-        if col == 'encounter_block':
-            file.write(f"\nN,,{n_total},{n_early},{n_not},")
-        elif block_df[col].dtype == 'object' or pd.api.types.is_string_dtype(block_df[col]):
-            file.write(f"\n{lab}")
-            cats = block_df[col].dropna().unique()
-            p_df = pd.pivot_table(block_df[["encounter_block",col,"early_PT"]], index=col, columns="early_PT", values="encounter_block", aggfunc='count')
-            chi2_stat, p_value, dof, expected = stats.chi2_contingency(p_df.to_numpy())
-            for cc in cats:
-                if cc: #Because there is a NAN category
-                    cc_all = round(100*p_df.loc[cc,].sum()/block_df[col].count(),1)
-                    cc_early = round(100*p_df.loc[cc,'early_PT'].sum()/p_df['early_PT'].sum(),1)
-                    cc_not = round(100*p_df.loc[cc,'no_early_PT'].sum()/p_df['no_early_PT'].sum(),1)
-                    file.write(f"\n,{cc},{cc_all}%,{cc_early}%,{cc_not}%")
-            file.write(f", {round(p_value,5)}")
-        elif block_df[col].dtype == "bool" or block_df[col].dtype == "boolean":
-            if block_df[col].sum(skipna=True) > 0:#Pivot table does not work if there are no true values
-                sub_df = block_df[block_df[col].notna()]
-                sub_df['flag'] = np.where(sub_df[col],"TRUE", "FALSE")
-                p_df = pd.pivot_table(sub_df[["encounter_block","flag","early_PT"]], index="flag", columns="early_PT", values="encounter_block", aggfunc='count')
-                chi2_stat, p_value, dof, expected = stats.chi2_contingency(p_df.to_numpy())
-                cc_all = round(100*p_df.loc["TRUE",].sum()/sub_df[col].count(),1)
-                cc_early = round(100*p_df.loc["TRUE",'early_PT'].sum()/p_df['early_PT'].sum(),1)
-                cc_not = round(100*p_df.loc["TRUE",'no_early_PT'].sum()/p_df['no_early_PT'].sum(),1)
-                file.write(f"\n{lab},,{cc_all}%,{cc_early}%,{cc_not}%,{round(p_value,5)}")
-            else:
-                file.write(f"\n{lab},,0.00%,0.00%,0.00%,N/A")
-        elif pd.api.types.is_numeric_dtype(block_df[col]):
-            cc_all = block_df[col].dropna()
-            cc_early = block_df.loc[block_df[early_col], col]
-            cc_early = cc_early.dropna()
-            cc_not = block_df.loc[~block_df[early_col], col]
-            cc_not = cc_not.dropna()
-            SMD = calculate_smd(cc_early.tolist(), cc_not.tolist())
-            file.write(f"\n{lab} (Med & IQR),,{round(cc_all.median(),2)}  ({round(cc_all.quantile(0.25),2)} - {round(cc_all.quantile(0.75),2)})")
-            file.write(f",{round(cc_early.median(),2)}  ({round(cc_early.quantile(0.25),2)} - {round(cc_early.quantile(0.75),2)})")
-            file.write(f",{round(cc_not.median(),2)}  ({round(cc_not.quantile(0.25),2)} - {round(cc_not.quantile(0.75),2)})")
-            file.write(f",{round(SMD,5)}")
-        else:
-            file.write(f"\n{lab},ERROR,,,,,")
-        #Missing data column
-        mis_pct = round(100*sum(block_df[col].isna())/n_total,2)
-        file.write(f",{mis_pct}%")
-            
-
-
-# ## CIF Graph
-
-# In[24]:
-
-
-import matplotlib.pyplot as plt
-
-#Create a new lists
-yellow_list = block_df['yellow_time_eligibility_2h'].sort_values().dropna()
-pt_list = block_df['Time_first_PT'].sort_values().dropna()
-
-# Plot CIF
-plt.figure(figsize=(8, 6))
-plt.step(yellow_list, np.arange(yellow_list.size), color='orange')
-plt.step(pt_list, np.arange(pt_list.size), color='blue')
-plt.xlabel("Hours from IMV Initiation")
-plt.xlim(0, 72)
-plt.ylabel("Encounters")
-plt.title("Physioliogic Readiness versus PT Consult Order CIF")
-plt.legend()
-
-#Save and show
-path = os.path.join(output_folder, 'final','graphs',"CIF_Yellow_v_PT.png")
-plt.savefig(path)
-plt.show()
-plt.close()
-
-
-# ## Time Bin Summary Graphs
-
-# In[25]:
-
-
-pt_time_bin_df = time_bin.df.groupby('bin_start')['pt_order'].agg('sum').reset_index()
-pt_time_bin_df.sort_values(by='bin_start', inplace=True)
-
-plt.figure(figsize=(8, 6))
-plt.bar(pt_time_bin_df['bin_start'].tolist(), pt_time_bin_df['pt_order'].tolist(), color='blue')
-plt.xlabel("Hours from IMV Initiation")
-plt.xticks(np.arange(0, 48, 4))
-plt.ylabel("Encounters")
-plt.title("Early PT Consult Order Prevalence Over Time")
-
-#Save and show
-path = os.path.join(output_folder, 'final','graphs',"Time_bin_PT.png")
-plt.savefig(path)
-plt.show()
-plt.close()
-
-
-# ## Merging for Stats
-# Create a merged block_df and time_bin.df to be used for stats.
-
-# In[26]:
-
-
-column_order = column_order.reset_index()
-mask_cols = (column_order['name'] == 'encounter_block') | (column_order['covariate'] == 1) | (column_order['outcome'] == 1) | column_order['other'].notna()
-stats_cols = column_order[mask_cols]
-stats_df = block_df[stats_cols['name'].tolist()].copy()
-stats_df = stats_df.merge(time_bin.df, on='encounter_block', how='inner').reset_index()
-log(f"Stats data set contains {block_df['encounter_block'].nunique()} encounter_blocks.")
-log(f"Stats data set contains {stats_df['encounter_block'].nunique()} encounter_blocks.")
-path = os.path.join(output_folder, 'intermediate',"block_and_time_bins_for_stats.csv")
-stats_df.to_csv(path)
+#Missing summary
+helper.missing_summary(block_df,f_name='block_df_3_end')
 

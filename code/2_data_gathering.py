@@ -707,7 +707,7 @@ hourly.df['coma'] = hourly.df['coma'].astype(int)
 del rass_df
 
 
-# ### Save
+# ### Save Hourly Data
 
 # In[26]:
 
@@ -916,23 +916,6 @@ log(f"Missing CAM-ICU at block level: {sum(block_df['cam_icu_0_24h_flag'].isna()
 del cam_df
 
 
-# ### Save
-
-# In[38]:
-
-
-#FIRST SAVING POINT
-#sort of
-path = os.path.join(output_folder,'intermediate', "block_df_2_aggregated.parquet")
-block_df.to_parquet(path)
-del path
-#Censor out dead data
-time_bin.remove_based_on_censor('death', keep_first=True)
-#Save (which will save the data as well as a summary of it)
-time_bin.save(suffix='_step_2')
-del time_bin #To save memory
-
-
 # ## Elixhauser
 # Using package comorbidipy with Quan et al mappings and Van Walraven weights
 # 
@@ -940,7 +923,7 @@ del time_bin #To save memory
 # 
 # Note that this uses either ICD 9 or ICD 10 codes for any given encounter_block. There was a hard switch at some point so there should actually NO encounters with both ICD codes mixed.
 
-# In[39]:
+# In[38]:
 
 
 #If we need to convert admission year from MIMIC date to real dates.
@@ -979,13 +962,9 @@ print(f"Block Length: {len(block_df)}")
 print(f"Unique Encounter Block: {block_df['encounter_block'].nunique()}")
 
 
-# In[40]:
+# In[39]:
 
 
-#Elixhauser
-import comorbidipy
-
-#Elixhauser
 #Load with filter
 _filters = {
     'hospitalization_id': hosp_list
@@ -1004,11 +983,11 @@ diag_df = pd.merge(
         diag_df[['encounter_block','diagnosis_code','diagnosis_code_format']],
         on='encounter_block',
         how='left'
-    )
+    ).drop_duplicates().reset_index()
 
 #Create separate data frames for each ICD version
-diag_9_df = diag_df[diag_df['diagnosis_code_format'] == 'ICD9CM'].drop_duplicates().reset_index() 
-diag_10_df = diag_df[diag_df['diagnosis_code_format'] == 'ICD10CM'].drop_duplicates().reset_index()
+diag_9_df = diag_df[diag_df['diagnosis_code_format'] == 'ICD9CM'].drop_duplicates()
+diag_10_df = diag_df[diag_df['diagnosis_code_format'] == 'ICD10CM'].drop_duplicates()
 diag_9_df = diag_9_df[['encounter_block','diagnosis_code','age']]
 diag_10_df = diag_10_df[['encounter_block','diagnosis_code','age']]
 
@@ -1016,67 +995,24 @@ diag_10_df = diag_10_df[['encounter_block','diagnosis_code','age']]
 duplicate_icds_n = sum(diag_9_df['encounter_block'].isin(diag_10_df['encounter_block']))
 log(f"Number of encnounters with comorbidities in both ICD codes: {duplicate_icds_n}")
 
-#Run it for ICD 9
-elix_9_df = comorbidipy.comorbidity(
-    diag_9_df,
-    id='encounter_block',
-    code='diagnosis_code',
-    age='age',
-    score = 'elixhauser',
-    icd = 'icd9',
-    variant = 'quan',
-    weighting = 'vw',#Van Walraven weights
-)
-
-#Run it for ICD 10
-elix_10_df = comorbidipy.comorbidity(
-    diag_10_df,
-    id='encounter_block',
-    code='diagnosis_code',
-    age='age',
-    score = 'elixhauser',
-    icd = 'icd10',
-    variant = 'quan',
-    weighting = 'vw',#Van Walraven weights
-)
-
-
-# In[41]:
-
-
-#Concatenate both types
-elix_df = pd.concat(
-    [elix_10_df[['encounter_block','comorbidity_score','age_adj_comorbidity_score']],elix_9_df[['encounter_block','comorbidity_score','age_adj_comorbidity_score']]],
-    ignore_index=True
-)
-#If any encounters have both types of diagnostic codes it will keep the ICD 10 code only. (first)
-elix_df.drop_duplicates(subset='encounter_block',keep='first',inplace=True)
-
-#Rename columns for our convention
-elix_df.rename(columns={'comorbidity_score':'elixhauser','age_adj_comorbidity_score':'elixhauser_age_adj'},inplace=True)
-
-block_df = pd.merge(
-    block_df,
-    elix_df,
-    on='encounter_block',
-    how='left'
-)
-
-del elix_df, elix_9_df, elix_10_df, diag_df, diag_9_df, diag_10_df
-
-#Fill values for empty encnounters.
-#Justified because ALL encounters have ICD codes, missing implies no comorbidities because we removed the primary admisison diagnosis.
-block_df = block_df.fillna(value={'elixhauser':0,'elixhauser_age_adj':0})
+#LAST SAVING POINT
+path = os.path.join(output_folder,"intermediate", "diag_codes.parquet")
+diag_df.to_parquet(path)
+#del path, diag_df, diag_9_df, diag_10_df
 
 
 # ## Save
 
-# In[42]:
+# In[40]:
 
 
-#LAST SAVING POINT
-helper.missing_summary(block_df,f_name='block_df_2_end')
-path = os.path.join(output_folder,"intermediate", "block_df_2_end.parquet")
+#SAVING POINT
+path = os.path.join(output_folder,'intermediate', "block_df_2_aggregated.parquet")
 block_df.to_parquet(path)
 del path
+#Censor out dead data
+time_bin.remove_based_on_censor('death', keep_first=True)
+#Save (which will save the data as well as a summary of it)
+time_bin.save(suffix='_step_2')
+del time_bin #To save memory
 
