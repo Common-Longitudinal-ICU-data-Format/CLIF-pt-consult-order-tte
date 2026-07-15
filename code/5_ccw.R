@@ -161,7 +161,7 @@ separate_complete_frames <- function(df,
   df_N$clone <- factor("N", levels = c("N", "E"))
   df_N <- df_N[order(df_N$encounter_block, df_N$time_bin), ]
   #Keep uncensored row or rows where the censoring event happens.
-  df_N <- df_N %>% filter( (PT_censor_N = 0) | (pt_now = 1))
+  df_N <- df_N %>% filter( (PT_censor_N == 0) | (pt_now == 1))
 
   vars_needed_E <- c("PT_censor_E", vars_needed)
   df_E <- df[complete.cases(df[, vars_needed_E]), ]
