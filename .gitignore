@@ -242,3 +242,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+config.json
+.DS_Store

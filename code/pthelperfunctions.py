@@ -170,7 +170,9 @@ class time_bins:
             self.df = self.df.sort_values(by=['encounter_block','bin_start']) #A bit repetitive but hard to have do this other way
             self.df[val_col] = self.df.groupby('encounter_block')[val_col].ffill()
         else:
-            self.df[val_col].fillna(fill_with, inplace=True)
+            # NB: chained `self.df[col].fillna(..., inplace=True)` is a silent no-op
+            # under pandas 3.0 Copy-on-Write. Assign the result back instead.
+            self.df[val_col] = self.df[val_col].fillna(fill_with)
     
     def gather_time_bins(self,
                          input_df:pd.DataFrame,
@@ -388,7 +390,9 @@ class hourly_blocks:
             self.df[val_col] = self.df.groupby('encounter_block')[val_col].ffill()
             self.df[val_col] = self.df.groupby('encounter_block')[val_col].bfill()
         else:
-            self.df[val_col].fillna(fill_with, inplace=True)
+            # NB: chained `self.df[col].fillna(..., inplace=True)` is a silent no-op
+            # under pandas 3.0 Copy-on-Write. Assign the result back instead.
+            self.df[val_col] = self.df[val_col].fillna(fill_with)
     
     def addto_blocks(self,
                      input_df:pd.DataFrame,
