@@ -1,9 +1,8 @@
 # =============================================================================
-# 4_ccw_MV_revised.R
+# 5_ccw.R
 # Clone-Censor Weighting (CCW) implementation
 #
 #   - Stabilized versus unstabilized weights. (optional)
-#   - Calculate weight by time_bin OR using time_bin as a factor (optional)
 #   - For Clone E only, apply the "pt_now" (analogous to Webster et al. "recentstart")
 #     logic when assigning interval weights (also optional):
 #       * pt_now == 1  & uncensored  →  weight = 1 / P(uncensored)
@@ -19,7 +18,8 @@
 #       * Mortality (hosp, 30d, 1y) - Logistic
 #       * Competing hosp mortality versus discharge alive - FineGrey
 #   - Bootstrapping with non-parametric re-sampling with replacement.
-#
+# NEXT STEPS:
+# Add ICU FG model, Add age subgroup analysis
 # =============================================================================
 
 # ---- Packages ----------------------------------------------------------------
@@ -46,13 +46,23 @@ work_dir      <- normalizePath("..")
 output_folder <- file.path(work_dir, "output")
 
 #----- Options -----------------------------------------------------------------
-resample_N <- 100 #Effective bootstrapping resamples.
+resample_N <- 10 #Effective bootstrapping resamples.
 input_file_path <- file.path(output_folder, "intermediate",
                              "block_and_time_bins_for_stats.csv")
 use_recent_start_logic <- FALSE
 use_stabilized_weights <- FALSE
-use_time_bin_factor <- FALSE
-label <- "TR" #Additional label to append at the end of output files.
+label <- "ALL" #Additional label to append at the end of output files.
+
+# ---- Standardized output naming ------------------------------------------
+# All graph and table filenames follow:
+#   (name)_(trimmed|original)_(simple|MV)_(label).(ext)
+# For outputs that aren't tied to a simple-vs-MV regression (e.g. diagnostic
+# plots), pass model_type = NULL to drop that slot entirely.
+make_filename <- function(name, trim_status = "NA", model_type = "NA", ext = "pdf") {
+  parts <- c(name, trim_status, model_type, label)
+  parts <- parts[!vapply(parts, is.null, logical(1))]
+  paste0(paste(parts, collapse = "_"), ".", ext)
+}
 
 # =============================================================================
 # 1.  LOAD & PREP DATA
@@ -67,12 +77,38 @@ data[fac_vars] <- lapply(data[fac_vars], function(x) {
   factor(x)
 })
 
-# ---- Organize outcomes -------------------------------
+# ---- Binaries --------------------------------
+binary_vars <- c("pressor_flag", "paralytics_flag",
+                 "is_dead", "is_dead_hosp", "is_dead_2", "is_dead_30", "is_dead_365",
+                 "pt_order", "pt_now")
+to_binary <- function(x, col_name) {
+  if (is.logical(x)) {
+    out <- as.integer(x)
+  } else if (is.numeric(x)) {
+    out <- x
+  } else {
+    x_chr <- trimws(as.character(x))
+    x_chr[x_chr == ""] <- NA
+    lookup <- c(
+      "1" = 1, "0" = 0,
+      "TRUE" = 1, "FALSE" = 0,
+      "True" = 1, "False" = 0,
+      "true" = 1, "false" = 0,
+      "T" = 1, "F" = 0,
+      "Y" = 1, "N" = 0,
+      "YES" = 1, "NO" = 0,
+      "Yes" = 1, "No" = 0
+    )
+    out <- unname(lookup[x_chr])
+  }
+}
+for (col in binary_vars) {
+  data[[col]] <- to_binary(data[[col]], col)
+}
+
+# ---- Integers -------------------------------
 data$vent_free_days <- as.integer(data$vent_free_days)
 data$icu_los_days   <- as.integer(data$icu_los_days)
-data$is_dead_hosp   <- ifelse(data$is_dead_hosp  == "True", 1, 0)
-data$is_dead_30     <- ifelse(data$is_dead_30    == "True", 1, 0)
-data$is_dead_365    <- ifelse(data$is_dead_365   == "True", 1, 0)
 
 # ---- Covariate lists & Ordering ----------------------------------------------
 # Fixed (baseline) covariates — same as before
@@ -104,7 +140,6 @@ time_bins <- sort(unique(bin_df$time_bin))
 bin_df$PT_censor_N <- bin_df$pt_order
 
 # Censor E: censored only at the final bin (bin_end == 48) if PT never occurred
-bin_df$pt_post48_IMV = bin_df$pt_post48_IMV == "True"
 bin_df$PT_censor_E <- ifelse((!bin_df$pt_post48_IMV) & bin_df$bin_end == 48, 1, 0)
 
 # ---- Discharge Type for Fine Grey --------------------------------------------
@@ -138,7 +173,7 @@ separate_complete_frames <- function(df,
   
 }
 # =============================================================================
-# 3a.  PER-TIME-BIN WEIGHTING  (Webster-Clark approach)
+# 3.  PER-TIME-BIN WEIGHTING  (Webster-Clark approach)
 #
 #  For each unique time_bin t:
 #    a) Subset rows that are "active" at time t  (the row for that bin)
@@ -299,110 +334,6 @@ fit_interval_weights <- function(clone_df,
 }
 
 # =============================================================================
-# 3b.  TIME-BIN AS A FACTOR WEIGHTING
-#
-#  One single regression using time_bin as a factorized variable.
-#
-# =============================================================================
-fit_interval_weights_factor <- function(clone_df,
-                                 censor_col,   # "PT_censor_N" or "PT_censor_E"
-                                 pt_now_logic = FALSE,
-                                 stabilize = FALSE) {
-  # pt_now_logic = TRUE  → Clone E weighting (use pt_now flag)
-  # pt_now_logic = FALSE → Clone N weighting (always 1/p_uncens when uncensored)
-  
-  #Factorize time_bin
-  clone_df$time_bin <- as.factor(clone_df$time_bin)
-  
-  #Probability of censoring formula
-  rhs_formula <- paste(c("time_bin", base_vars, tv_vars), collapse = " + ")
-  form        <- as.formula(paste(censor_col, "~", rhs_formula))
-  
-  # Stabilized weights formula
-  rhs_stab <- paste(c(base_vars), collapse = " + ")
-  form_stab <- as.formula(paste(censor_col, "~", rhs_stab))
-  
-  # Fit the GLM
-  # Response: P(censored at t)  — following Webster-Clark's formulation
-  fit <- tryCatch(
-    glm(form, data = clone_df, family = binomial(link = "logit")),
-    error = function(e) {
-      message(sprintf("GLM failed for time_bin %d (%s) probability. Defaulting to raw mean.",
-                      tb, censor_col))
-      NULL
-    }
-  )
-  
-  clone_df$p_cens   <- predict(fit, newdata = clone_df, type = "response")
-  clone_df$p_uncens <- 1 - clone_df$p_cens
-  
-  #STABILIZATION STEP
-  if (stabilize) {
-    # Fit the GLM for baseline variables
-    # Response: P(censored at t)  — using fix covariates only
-    fit <- tryCatch(
-      glm(form_stab, data = clone_df, family = binomial(link = "logit")),
-      error = function(e) {
-        message(sprintf("GLM failed for time_bin %d (%s) stabilization numerator. Defaulting to raw mean.",
-                        tb, censor_col))
-        NULL
-      }
-    )
-    clone_df$p_stab   <- 1 - predict(fit, newdata = clone_df, type = "response")
-  } else {
-    clone_df$p_stab <- 1
-  }
-  
-  # ---- Assign interval weight ----------------------------------------------
-  if (!pt_now_logic) {
-    # ---- Clone N ------------------------------------------------------------
-    # Uncensored rows: weight = 1 / P(uncensored)
-    # Censored rows:   weight = 0
-    clone_df$interval_wt <- ifelse(
-      clone_df[[censor_col]] == 0,
-      clone_df$p_stab / clone_df$p_uncens,
-      0
-    )
-  } else {
-    # ---- Clone E (Webster-Clark recentstart logic) --------------------------
-    # pt_now == 1 & uncensored: patient *just* started PT this bin.
-    #   They could only plausibly remain in the study because they happened to
-    #   start — upweight them by 1/P(uncensored).
-    # pt_now == 0 & uncensored: patient did not start PT this bin.
-    #   They are following the expected trajectory; weight = 1.
-    # censored (regardless of pt_now): weight = 0.
-    clone_df$interval_wt <- case_when(
-      clone_df[[censor_col]] == 1              ~  0,                         # censored → 0
-      clone_df[[censor_col]] == 0 & clone_df$pt_now == 1 ~ clone_df$p_stab / clone_df$p_uncens,  # just started PT → upweight
-      clone_df[[censor_col]] == 0 & clone_df$pt_now == 0 ~ 1,               # not yet started, still in study → 1
-      TRUE                                     ~  NA_real_
-    )
-  }
-  
-  # ---- Cumulative product of interval weights per encounter ------------------
-  # This matches Webster-Clark's final multiplicative IPCW.
-  # We use ave() with cumprod, which respects the ordering within each group.
-  clone_df$IPCW <- ave(
-    clone_df$interval_wt,
-    clone_df$encounter_block,
-    FUN = cumprod
-  )
-  
-  # Note we make this sample a global variable so we can review
-  # results from outside the function.
-  sample_df <<- clone_df
-  
-  #Make final weights for all clones by encounter block
-  clone_df <- clone_df %>%
-    group_by(encounter_block) %>%
-    slice_tail(n = 1) %>%                        # last observed bin
-    filter(!!sym(censor_col) == 0) %>%           # must be uncensored at exit
-    ungroup()
-  
-  return(clone_df)
-}
-
-# =============================================================================
 # 4.  COMBINE STEPS 2 & 3
 # =============================================================================
 all_vars_final <- c("encounter_block","pt_post48_IMV","clone","IPCW","dc_type", base_vars, out_vars)
@@ -410,42 +341,22 @@ clone_and_weight <- function(bin_data) {
   #Create clone data frames
   clone_frames <- separate_complete_frames(bin_data)
   
-  #time_bin as a factor uses a different formula
-  if (use_time_bin_factor) {
-    #Give them weights
-    clone_frames$clones_N <- fit_interval_weights_factor(
-      clone_df     = clone_frames$clones_N,
-      censor_col   = "PT_censor_N",
-      pt_now_logic = FALSE,
-      stabilize = use_stabilized_weights
-    )
-    weights_N <<- sample_df #This is for analysis later of the original data set only.
-    
-    clone_frames$clones_E <- fit_interval_weights_factor(
-      clone_df     = clone_frames$clones_E,
-      censor_col   = "PT_censor_E",
-      pt_now_logic = use_recent_start_logic,
-      stabilize = use_stabilized_weights
-    )
-    weights_E <<- sample_df #This is for analysis later of the original data set only.
-  } else {
-    #Give them weights
-    clone_frames$clones_N <- fit_interval_weights(
-      clone_df     = clone_frames$clones_N,
-      censor_col   = "PT_censor_N",
-      pt_now_logic = FALSE,
-      stabilize = use_stabilized_weights
-    )
-    weights_N <<- sample_df #This is for analysis later of the original data set only.
-    
-    clone_frames$clones_E <- fit_interval_weights(
-      clone_df     = clone_frames$clones_E,
-      censor_col   = "PT_censor_E",
-      pt_now_logic = use_recent_start_logic,
-      stabilize = use_stabilized_weights
-    )
-    weights_E <<- sample_df #This is for analysis later of the original data set only.
-  }
+  #Give them weights
+  clone_frames$clones_N <- fit_interval_weights(
+    clone_df     = clone_frames$clones_N,
+    censor_col   = "PT_censor_N",
+    pt_now_logic = FALSE,
+    stabilize = use_stabilized_weights
+  )
+  weights_N <<- sample_df #This is for analysis later of the original data set only.
+  
+  clone_frames$clones_E <- fit_interval_weights(
+    clone_df     = clone_frames$clones_E,
+    censor_col   = "PT_censor_E",
+    pt_now_logic = use_recent_start_logic,
+    stabilize = use_stabilized_weights
+  )
+  weights_E <<- sample_df #This is for analysis later of the original data set only.
   
   #Create one large analytic cohort
   out_df <- bind_rows(clone_frames$clones_N, clone_frames$clones_E)
@@ -504,7 +415,8 @@ p_ipcw_time <- ggplot(ipcw_long, aes(x = time_bin_f, y = IPCW, fill = clone)) +
   theme_bw() +
   labs(title = "Trajectory of Unstabilized IPCW Over Time",
        x = "Time bin", y = "Unstabilized IPCW", fill = "Clone")
-ggsave(file.path(output_folder, "final", "graphs", paste("original_IPCW_trajectory",label,".pdf")),
+ggsave(file.path(output_folder, "final", "graphs",
+                 make_filename("weight_trajectory", "original", NULL)),
        plot = p_ipcw_time, width = 8, height = 5)
 
 p_ipcw_time1 <- ggplot(ipcw_long, aes(x = time_bin_f, y = IPCW_trim, fill = clone)) +
@@ -513,7 +425,8 @@ p_ipcw_time1 <- ggplot(ipcw_long, aes(x = time_bin_f, y = IPCW_trim, fill = clon
   theme_bw() +
   labs(title = "Trajectory of Trimmed Unstabilized IPCW Over Time",
        x = "Time bin", y = "Trimmed Unstabilized IPCW", fill = "Clone")
-ggsave(file.path(output_folder, "final", "graphs", paste("trim_IPCW_trajectory",label,".pdf")),
+ggsave(file.path(output_folder, "final", "graphs",
+                 make_filename("weight_trajectory", "trimmed", NULL)),
        plot = p_ipcw_time1, width = 8, height = 5)
 
 #Final Weights Plot
@@ -522,7 +435,8 @@ g <- ggplot(original_analysis_df, aes(x = IPCW, fill = clone)) +
   theme_bw() +
   labs(title = "Distribution of final weights by clone",
        x = "Final weight", y = "Count", fill = "Clone Group")
-ggsave(file.path(output_folder, "final", "graphs", paste("original_final_IPCW",label,".pdf")),
+ggsave(file.path(output_folder, "final", "graphs",
+                 make_filename("weight_distribution", "original", NULL)),
        plot = g, width = 7, height = 5)
 
 g1 <- ggplot(original_analysis_df, aes(x = IPCW_trim, fill = clone)) +
@@ -530,7 +444,8 @@ g1 <- ggplot(original_analysis_df, aes(x = IPCW_trim, fill = clone)) +
   theme_bw() +
   labs(title = "Distribution of trimmed final weights by clone",
        x = "Final weight", y = "Count", fill = "Clone Group")
-ggsave(file.path(output_folder, "final", "graphs", paste("trim_final_IPCW",label,".pdf")),
+ggsave(file.path(output_folder, "final", "graphs",
+                 make_filename("weight_distribution", "trimmed", NULL)),
        plot = g1, width = 7, height = 5)
 
 
@@ -548,7 +463,8 @@ p_balance <- love.plot(bal_ccw, stats = "mean.diffs", abs = TRUE,
                        stars = "raw", sample.names = c("Unweighted", "Weighted"),
                        title = "Baseline Covariate Balance Before and After IPCW")
 print(p_balance)
-ggsave(file.path(output_folder, "final", "graphs", paste("balance_plot_IPCW",label,".pdf")),
+ggsave(file.path(output_folder, "final", "graphs",
+                 make_filename("balance_plot", "trimmed", NULL)),
        plot = p_balance, width = 8, height = 6)
 
 # =============================================================================
@@ -570,6 +486,8 @@ out_boot_df <- data.frame(
   dead_365_N = numeric(),
   dead_365_E = numeric(),
   dead_FG_HR = numeric(),
+  dead_FG_30_N = numeric(),
+  dead_FG_30_E = numeric(),
   stringsAsFactors = FALSE
 )
 #Note that this will store both simple regression and MV regression as well
@@ -577,7 +495,7 @@ out_boot_df <- data.frame(
 #number of bootstrap resamples.
 
 #Function to calculate treatment effect with model + data
-standardized_contrast <- function(fit, data, outcome_name, clone_var = "clone") {
+standardized_contrast <- function(fit, data, clone_var = "clone") {
   dE <- data; dN <- data
   dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
   dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
@@ -587,6 +505,35 @@ standardized_contrast <- function(fit, data, outcome_name, clone_var = "clone") 
          mean_pred_N    = mean(pred_N, na.rm = TRUE))
   
   return(pred)
+}
+
+#Function to calculate treatment effect with FG model + data
+standardized_contrast_FG <- function(fit, data, time_point, clone_var = "clone") {
+  dE <- data; dN <- data
+  dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
+  dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
+  
+  # Baseline cumulative hazard, computed once (independent of n subjects),
+  # evaluated at time_point via a simple step-function lookup.
+  H0 <- basehaz(fit, centered = FALSE)
+  idx <- findInterval(time_point, H0$time)
+  H0_t <- if (idx == 0) 0 else H0$hazard[idx]
+  S0_t <- exp(-H0_t)
+  
+  # Per-subject relative risk exp(lp) at the same "zero" reference as H0,
+  # so the two combine consistently. This is one vectorized calculation,
+  # not a per-subject curve.
+  risk_E <- predict(fit, newdata = dE, type = "risk", reference = "zero")
+  risk_N <- predict(fit, newdata = dN, type = "risk", reference = "zero")
+  
+  # S_i(t) = 1 - S0(t) ^ exp(lp_i)  ->  P(dead at time_point) per subject
+  pred_E <- 1 - S0_t ^ risk_E
+  pred_N <- 1 - S0_t ^ risk_N
+  
+  tibble(
+    frac_pred_E = mean(pred_E, na.rm = TRUE),
+    frac_pred_N = mean(pred_N, na.rm = TRUE)
+  )
 }
 
 model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
@@ -630,11 +577,12 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
     robust = TRUE
   )
   
-  vfd_con       <- standardized_contrast(fit_vfd, sample_df, "vent_free_days")
-  icu_con       <- standardized_contrast(fit_icu_los, sample_df, "icu_los_days")
-  dead_hosp_con <- standardized_contrast(fit_dead_hosp, sample_df, "is_dead_hosp")
-  dead_30_con   <- standardized_contrast(fit_dead_30, sample_df, "is_dead_30")
-  dead_365_con  <- standardized_contrast(fit_dead_365, sample_df, "is_dead_365")
+  vfd_con       <- standardized_contrast(fit_vfd, sample_df)
+  icu_con       <- standardized_contrast(fit_icu_los, sample_df)
+  dead_hosp_con <- standardized_contrast(fit_dead_hosp, sample_df)
+  dead_30_con   <- standardized_contrast(fit_dead_30, sample_df)
+  dead_365_con  <- standardized_contrast(fit_dead_365, sample_df)
+  dead_FG_30_con  <- standardized_contrast_FG(fit_dead_fg, data_dead_fg, 30)
   
   data.frame(
     iteration   = iteration_n,
@@ -649,84 +597,49 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
     dead_30_E   = dead_30_con$mean_pred_E,
     dead_365_N  = dead_365_con$mean_pred_N,
     dead_365_E  = dead_365_con$mean_pred_E,
-    dead_FG_HR = exp(coef(fit_dead_fg)["cloneE"])
+    dead_FG_HR = exp(coef(fit_dead_fg)["cloneE"]),
+    dead_FG_30_N = dead_FG_30_con$frac_pred_N,
+    dead_FG_30_E = dead_FG_30_con$frac_pred_E
   )
 }
 
+#Create original models - Simple regressions
+out_boot_df <- rbind(out_boot_df, model_outcomes(original_analysis_df,"original",type_reg = "simple"))
+#Create original models - MV regressions
+out_boot_df <- rbind(out_boot_df, model_outcomes(original_analysis_df,"original",type_reg = "MV"))
 
 # =============================================================================
-# 9.  G-Formula Survival Curve
-# Fits original data only, not bootstrapped.
-# Create E and N survival curves using marginal effect.
+# 9. Marginal Fine-Gray mortality curve (0 to time_max) for clone E vs clone N
 # =============================================================================
-plot_gformula_finegray <- function(
-    sample_df,
-    fit,
-    covars = NULL,  # character vector of covariate names used in the model
-    # (excluding 'clone'); NULL for simple model
-    colors = c("N" = "#2E86AB", "E" = "#E74C3C"),
-    title  = "Marginal Cumulative Incidence Curves (G-formula standardisation)"
-) {
 
-  # ── 1. Clone dataset under each treatment arm ──────────────────────────────
-  data_E <- sample_df %>% mutate(clone = factor("E", levels = c("N", "E")))
-  data_N <- sample_df %>% mutate(clone = factor("N", levels = c("N", "E")))
+get_marginal_mortality_curve <- function(fit, data, times, clone_var = "clone") {
+  dE <- data; dN <- data
+  dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
+  dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
   
-  # ── 2. Build covariate matrices (must match what was passed to crr's cov1) ──
-  rhs <- if (is.null(covars) || length(covars) == 0) {
-    "~ clone"
-  } else {
-    paste("~", paste(c("clone", covars), collapse = " + "))
-  }
-  cov_formula <- as.formula(rhs)
+  H0 <- basehaz(fit, centered = FALSE)
+  H0_vec <- sapply(times, function(t) {
+    idx <- findInterval(t, H0$time)
+    if (idx == 0) 0 else H0$hazard[idx]
+  })
   
-  cov_E <- model.matrix(cov_formula, data = data_E)[, -1, drop = FALSE]
-  cov_N <- model.matrix(cov_formula, data = data_N)[, -1, drop = FALSE]
+  risk_E <- predict(fit, newdata = dE, type = "risk", reference = "zero")
+  risk_N <- predict(fit, newdata = dN, type = "risk", reference = "zero")
   
-  # ── 3. Predict individual CIFs and average (standardise) ───────────────────
-  # predict.crr() returns a matrix: column 1 = time, columns 2+ = individual CIFs
-  pred_E <- predict(fit, cov1 = cov_E)
-  pred_N <- predict(fit, cov1 = cov_N)
+  S_E <- outer(H0_vec, risk_E, function(h, r) exp(-h)^r)
+  S_N <- outer(H0_vec, risk_N, function(h, r) exp(-h)^r)
   
-  cif_df <- bind_rows(
-    data.frame(time = pred_E[, 1], cif = rowMeans(pred_E[, -1, drop = FALSE]), strata = "E"),
-    data.frame(time = pred_N[, 1], cif = rowMeans(pred_N[, -1, drop = FALSE]), strata = "N")
+  tibble(
+    time   = times,
+    mort_E = 1 - rowMeans(S_E, na.rm = TRUE),
+    mort_N = 1 - rowMeans(S_N, na.rm = TRUE)
   )
-  
-  # Prepend (0, 0) for each stratum so curves start at the origin
-  cif_df <- bind_rows(
-    data.frame(time = 0, cif = 0, strata = c("E", "N")),
-    cif_df
-  ) %>%
-    arrange(strata, time)
-  
-  # ── 4. Plot ────────────────────────────────────────────────────────────────
-  ggplot(cif_df, aes(x = time, y = cif, color = strata)) +
-    geom_step(linewidth = 0.9) +
-    scale_x_continuous(
-      limits = c(0, 30), breaks = seq(0, 30, by = 5),
-      expand = expansion(mult = c(0, 0.02))
-    ) +
-    scale_y_continuous(
-      limits = c(0, NA),
-      labels = scales::label_percent(accuracy = 1),
-      expand = expansion(mult = c(0, 0.02))
-    ) +
-    scale_color_manual(values = colors, name = "Clone") +
-    labs(
-      x       = "Days from IMV",
-      y       = "Cumulative incidence of hospital death",
-      title   = title,
-      caption = "Competing event: discharge alive. Standardised over covariate distribution (g-formula)."
-    ) +
-    theme_minimal(base_size = 13) +
-    theme(
-      legend.position  = "top",
-      panel.grid.minor = element_blank(),
-      plot.title       = element_text(hjust = 0.5, face = "bold"),
-      plot.caption     = element_text(colour = "grey50", size = 9)
-    )
 }
+
+time_grid <- 0:30
+
+# ---- Point estimate curve from the ORIGINAL (non-bootstrapped) model ----
+point_curve <- get_marginal_mortality_curve(fit_dead_fg, data_dead_fg, time_grid)
 
 # =============================================================================
 # 10.  RESULTS ORGANISATION
@@ -770,9 +683,6 @@ extract_finegray_table <- function(fit, model_name) {
               p_value = .data[[p_col]])
 }
 
-#Create model (simple regressions)
-out_boot_df <- rbind(out_boot_df, model_outcomes(original_analysis_df,"original",type_reg = "simple"))
-
 #Create tabs
 tab_vfd      <- extract_zeroinfl_table(fit_vfd,      "vent_free_days")
 tab_icu_los  <- extract_glm_table(fit_icu_los,       "icu_los_days")
@@ -789,19 +699,9 @@ addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_
 addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
 addWorksheet(wb, "FG");           writeData(wb, "FG",            tab_dead_fg)
 addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", out_boot_df[1,])
-saveWorkbook(wb, file = file.path(output_folder, "final", paste("ccw_IPCW_results",label,".xlsx")),
+saveWorkbook(wb, file = file.path(output_folder, "final",
+                                   make_filename("regression_results", "trimmed", "simple", "xlsx")),
              overwrite = TRUE)
-
-#FG plot
-#fg_plot_original <- plot_gformula_finegray(data_dead_fg, fit_dead_fg,
-#                                           covars = NULL,
-#                                           title = "Marginal Mortality CIF Curves (simple))")
-#ggsave(file.path(output_folder, "final", "graphs", "fg_plot_simple.pdf"), fg_plot_original, width = 7, height = 5, dpi = 300)
-
-
-#Create model (MV regressions)
-#Create model (simple regressions)
-out_boot_df <- rbind(out_boot_df, model_outcomes(original_analysis_df,"original",type_reg = "MV"))
 
 #Create tabs
 tab_vfd      <- extract_zeroinfl_table(fit_vfd,      "vent_free_days")
@@ -819,18 +719,17 @@ addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_
 addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
 addWorksheet(wb, "FG");           writeData(wb, "FG",            tab_dead_fg)
 addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", out_boot_df[2,])
-saveWorkbook(wb, file = file.path(output_folder, "final", paste("ccw_IPCW_results_multivariate",label,".xlsx")),
+saveWorkbook(wb, file = file.path(output_folder, "final",
+                                   make_filename("regression_results", "trimmed", "MV", "xlsx")),
              overwrite = TRUE)
-
-#FG plot
-#fg_plot_original <- plot_gformula_finegrat(data_dead_fg, fit_dead_fg,
-#                                           covars = NULL,
-#                                           title = "Marginal Mortality CIF Curves (simple))")
-#ggsave(file.path(output_folder, "final", "graphs", paste("fg_plot_simple",paste,".pdf")), fg_plot_original, width = 7, height = 5, dpi = 300)
 
 # =============================================================================
 # 11.  BOOTSTRAPPING
 # =============================================================================
+# ---- Bootstrap curves for confidence bands ----
+curve_boot_E <- matrix(NA_real_, nrow = resample_N, ncol = length(time_grid))
+curve_boot_N <- matrix(NA_real_, nrow = resample_N, ncol = length(time_grid))
+
 
 #Simple Sampler Function
 bootstrap_sample <- function(df, block_col = "encounter_block") {
@@ -860,6 +759,10 @@ for (sample_i in 1:resample_N) {
   #Create model (simple regressions)
   out_boot_df <- rbind(out_boot_df, model_outcomes(sample_df,sample_i,type_reg = "MV"))
   print(paste("Completed resample ", sample_i))
+  
+  curve_b <- get_marginal_mortality_curve(fit_dead_fg, data_dead_fg, time_grid)
+  curve_boot_E[sample_i, ] <- curve_b$mort_E
+  curve_boot_N[sample_i, ] <- curve_b$mort_N
 }
 
 # =============================================================================
@@ -877,6 +780,8 @@ out_boot_df$dead_30_diff <- out_boot_df$dead_30_E - out_boot_df$dead_30_N
 out_boot_df$dead_30_OR <- out_boot_df$dead_30_E / out_boot_df$dead_30_N
 out_boot_df$dead_365_diff <- out_boot_df$dead_365_E - out_boot_df$dead_365_N
 out_boot_df$dead_365_OR <- out_boot_df$dead_365_E / out_boot_df$dead_365_N
+out_boot_df$dead_FG_30_diff <- out_boot_df$dead_FG_30_E - out_boot_df$dead_FG_30_N
+out_boot_df$dead_FG_30_OR <- out_boot_df$dead_FG_30_E / out_boot_df$dead_FG_30_N
 
 #Divide into the simple and MV models
 boots_simple <- filter(out_boot_df,type == "simple")
@@ -966,7 +871,43 @@ save_summary_stats <- function(df, output_path) {
 }
 
 # Save
-boots_path = file.path(output_folder, "final", paste("bootstrapped_IPCW_results",label,".xlsx"))
+boots_path <- file.path(output_folder, "final",
+                        make_filename("bootstrap_summary", "trimmed", "simple", "xlsx"))
 save_summary_stats(boots_simple, boots_path)
-boots_path = file.path(output_folder, "final", paste("bootstrapped_IPCW_results_multivariate",label,".xlsx"))
+boots_path <- file.path(output_folder, "final",
+                        make_filename("bootstrap_summary", "trimmed", "MV", "xlsx"))
 save_summary_stats(boots_MV, boots_path)
+
+# =============================================================================
+# 11.  BOOTSTRAPPED SURVIVAL CURVE
+# =============================================================================
+
+# ---- Percentile CIs at each time point ----
+ci_E <- apply(curve_boot_E, 2, quantile, probs = c(0.025, 0.975), na.rm = TRUE)
+ci_N <- apply(curve_boot_N, 2, quantile, probs = c(0.025, 0.975), na.rm = TRUE)
+
+plot_df <- tibble(
+  time      = time_grid,
+  mort_E    = point_curve$mort_E,
+  mort_E_lo = ci_E[1, ],
+  mort_E_hi = ci_E[2, ],
+  mort_N    = point_curve$mort_N,
+  mort_N_lo = ci_N[1, ],
+  mort_N_hi = ci_N[2, ]
+)
+
+# ---- Plot ----
+ggplot(plot_df, aes(x = time)) +
+  geom_ribbon(aes(ymin = mort_E_lo, ymax = mort_E_hi, fill = "Clone E"), alpha = 0.2) +
+  geom_ribbon(aes(ymin = mort_N_lo, ymax = mort_N_hi, fill = "Clone N"), alpha = 0.2) +
+  geom_line(aes(y = mort_E, color = "Clone E"), linewidth = 1) +
+  geom_line(aes(y = mort_N, color = "Clone N"), linewidth = 1) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Days since IMV", y = "Predicted cumulative mortality",
+       color = "Clone", fill = "Clone",
+       title = "Predicted 30-day mortality: Clone E vs Clone N") +
+  theme_minimal()
+
+ggsave(file.path(output_folder, "final", "graphs",
+                 make_filename("mortality_curve", "95CI", "MV")),
+       plot = p_mortality_curve, width = 8, height = 5)

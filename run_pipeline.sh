@@ -58,16 +58,25 @@ log "Step 3: Calculations ran"
 
 # ── environment (renv) ─────────────────────────────────────────────────────────
 if ! command -v Rscript >/dev/null 2>&1; then
-  log "${RED}Rscript not found. Run steps 4 & 5 manualy"
+  log "${RED}Rscript not found. Run steps 4 & 5 manually"
   exit 1
 else
-    log "========== STARTING STEP 4: Table One =========="
-    Rscript --vanilla 4_table_one.R
-    log "Step 4: Table One ran"
-    log "========== STARTING STEP 5: CCW =========="
-    Rscript --vanilla 5_ccw.R
-    log "Step 5: CCW ran"
+  log "========== STARTING STEP 4: Table One =========="
+  if Rscript --vanilla 4_table_one.R; then
+    log "Step 4: Table One ran successfully"
+  else
+    log "${RED}Step 4: Table One FAILED"
+    exit 1
+  fi
 
+  log "========== STARTING STEP 5: CCW =========="
+  if Rscript --vanilla 5_ccw.R; then
+    log "Step 5: CCW ran successfully"
+  else
+    log "${RED}Step 5: CCW FAILED"
+    exit 1
+  fi
+fi
 
 # ── output files ──────────────────────────────────────────────────────────────
 log ""

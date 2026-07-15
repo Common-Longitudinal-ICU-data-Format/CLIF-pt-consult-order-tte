@@ -83,7 +83,7 @@ elix9 <- if (nrow(diag9) > 0) {
     id   = "encounter_block",
     code = "diagnosis_code_clean",
     map  = "elixhauser_icd9_quan",
-    assign0 = FALSE
+    assign0 = TRUE
   )
   # comorbidity() returns a data.frame with an extra "comorbidity" S3 class
   # (used internally for label-aware printing). That class has its own
@@ -99,7 +99,7 @@ elix10 <- if (nrow(diag10) > 0) {
     id   = "encounter_block",
     code = "diagnosis_code_clean",
     map  = "elixhauser_icd10_quan",
-    assign0 = FALSE
+    assign0 = TRUE
   )
   class(out) <- "data.frame"
   tibble::as_tibble(out)
@@ -126,7 +126,7 @@ elix_flags_for_scoring <- elix_flags
 class(elix_flags_for_scoring) <- c("comorbidity", class(elix_flags_for_scoring))
 attr(elix_flags_for_scoring, "map") <- "elixhauser_icd10_quan"
 
-vw_score <- score(elix_flags_for_scoring, weights = "vw", assign0 = FALSE)
+vw_score <- score(elix_flags_for_scoring, weights = "vw", assign0 = TRUE)
 
 ## Keep only encounter_block + a single summary score column -- not the
 ## 30 individual comorbidity flag columns

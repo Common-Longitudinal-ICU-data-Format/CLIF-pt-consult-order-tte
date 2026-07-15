@@ -104,34 +104,34 @@ def compute_consensus_flags(df):
     df['is_weekday'] = df['window_start_dttm'].dt.weekday < 5
     
     # --- RED flags ---
-    df['red_resp_spo2_flag'] = ((df['spo2_min'] < 90) | df['spo2_min'].isna()).astype(int)
-    df['red_map_flag'] = ((df['map_mean'] < 65) | df['map_mean'].isna()).astype(int)
-    df['red_high_support_flag'] = ((df['ne_calc_last'] > 0.3) | (df['ne_calc_max'] > 0.3)).astype(int)
+    df['red_resp_spo2_flag'] = ((df['spo2_min'] < 90) | df['spo2_min'].isna()).astype("Int64")
+    df['red_map_flag'] = ((df['map_mean'] < 65) | df['map_mean'].isna()).astype("Int64")
+    df['red_high_support_flag'] = ((df['ne_calc_last'] > 0.3) | (df['ne_calc_max'] > 0.3)).astype("Int64")
     df['red_hypertensive_flag'] = (
         (((df['sbp_max'] > 200) | (df['map_mean'] > 110)) &
         (df['red_med_flag'] == 1))
-    ).astype(int)
-    df['red_pulse_high_flag'] = (df['heart_rate_max'] > 150).astype(int)
-    df['red_pulse_low_flag'] = ((df['heart_rate_min'] < 40) | df['heart_rate_min'].isna()).astype(int)
+    ).astype("Int64")
+    df['red_pulse_high_flag'] = (df['heart_rate_max'] > 150).astype("Int64")
+    df['red_pulse_low_flag'] = ((df['heart_rate_min'] < 40) | df['heart_rate_min'].isna()).astype("Int64")
 
     # --- YELLOW flags ---
-    df['yellow_resp_spo2_flag'] = ((df['spo2_min'] >= 90) | df['spo2_min'].isna()).astype(int)
-    df['yellow_fio2_flag'] = (df['fio2_set_min'] > 0.6).astype(int)
-    df['yellow_resp_rate_flag'] = (df['respiratory_rate_max'] > 30).astype(int)
-    df['yellow_peep_flag'] = (df['peep_set_min'] > 10).astype(int)
-    df['yellow_map_flag'] = ((df['map_mean'] >= 65) & (df['ne_calc_last'].between(0.1, 0.3))).astype(int)
-    df['yellow_pulse_flag'] = (df['heart_rate_min'].between(120, 150)).astype(int)
-    df['yellow_lactate_flag'] = (df['lactate_max'] > 4).astype(int)
+    df['yellow_resp_spo2_flag'] = ((df['spo2_min'] >= 90) | df['spo2_min'].isna()).astype("Int64")
+    df['yellow_fio2_flag'] = (df['fio2_set_min'] > 0.6).astype("Int64")
+    df['yellow_resp_rate_flag'] = (df['respiratory_rate_max'] > 30).astype("Int64")
+    df['yellow_peep_flag'] = (df['peep_set_min'] > 10).astype("Int64")
+    df['yellow_map_flag'] = ((df['map_mean'] >= 65) & (df['ne_calc_last'].between(0.1, 0.3))).astype("Int64")
+    df['yellow_pulse_flag'] = (df['heart_rate_min'].between(120, 150)).astype("Int64")
+    df['yellow_lactate_flag'] = (df['lactate_max'] > 4).astype("Int64")
 
     # --- GREEN flags ---
-    df['green_resp_spo2_flag'] = ((df['spo2_min'] >= 90) | df['spo2_min'].isna()).astype(int)
-    df['green_resp_rate_flag'] = ((df['respiratory_rate_max'] <= 30) | df['respiratory_rate_max'].isna()).astype(int)
-    df['green_fio2_flag'] = ((df['fio2_set_min'] <= 0.6) | df['fio2_set_min'].isna()).astype(int)
-    df['green_peep_flag'] = ((df['peep_set_min'] <= 10) | df['peep_set_min'].isna()).astype(int)
-    df['green_map_flag'] = (((df['map_mean'] >= 65) & (df['ne_calc_last'] < 0.1)) | df['ne_calc_last'].isna()).astype(int)
-    df['green_pulse_flag'] = ((df['heart_rate_min'] < 120) | df['heart_rate_min'].isna()).astype(int)
-    df['green_lactate_flag'] = ((df['lactate_max'] <= 4) | df['lactate_max'].isna()).astype(int)
-    df['green_hr_flag'] = ((df['heart_rate_min'] > 40) | df['heart_rate_min'].isna()).astype(int)
+    df['green_resp_spo2_flag'] = ((df['spo2_min'] >= 90) | df['spo2_min'].isna()).astype("Int64")
+    df['green_resp_rate_flag'] = ((df['respiratory_rate_max'] <= 30) | df['respiratory_rate_max'].isna()).astype("Int64")
+    df['green_fio2_flag'] = ((df['fio2_set_min'] <= 0.6) | df['fio2_set_min'].isna()).astype("Int64")
+    df['green_peep_flag'] = ((df['peep_set_min'] <= 10) | df['peep_set_min'].isna()).astype("Int64")
+    df['green_map_flag'] = (((df['map_mean'] >= 65) & (df['ne_calc_last'] < 0.1)) | df['ne_calc_last'].isna()).astype("Int64")
+    df['green_pulse_flag'] = ((df['heart_rate_min'] < 120) | df['heart_rate_min'].isna()).astype("Int64")
+    df['green_lactate_flag'] = ((df['lactate_max'] <= 4) | df['lactate_max'].isna()).astype("Int64")
+    df['green_hr_flag'] = ((df['heart_rate_min'] > 40) | df['heart_rate_min'].isna()).astype("Int64")
 
     # --- Composite flags (shared conditions) ---
     _base = (
@@ -145,70 +145,70 @@ def compute_consensus_flags(df):
         (df['red_resp_spo2_flag'] | df['red_map_flag'] | df['red_high_support_flag'] |
          df['red_hypertensive_flag'] | df['red_pulse_high_flag'] | df['red_pulse_low_flag']) &
         _base
-    ).astype(int)
+    ).astype("Int64")
 
     df['no_red'] = (
         ~(df['red_resp_spo2_flag'] | df['red_map_flag'] | df['red_high_support_flag'] |
           df['red_hypertensive_flag'] | df['red_pulse_high_flag'] | df['red_pulse_low_flag']) &
         _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['any_yellow'] = (
         (df['yellow_resp_spo2_flag'] | df['yellow_fio2_flag'] | df['yellow_resp_rate_flag'] |
          df['yellow_peep_flag'] | df['yellow_map_flag'] | df['yellow_pulse_flag'] |
          df['yellow_lactate_flag']) &
         _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['any_green'] = (
         (df['green_resp_spo2_flag'] | df['green_resp_rate_flag'] | df['green_fio2_flag'] |
          df['green_peep_flag'] | df['green_map_flag'] | df['green_pulse_flag'] |
          df['green_lactate_flag'] | df['green_hr_flag']) &
         _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['all_green'] = (
         df['green_resp_spo2_flag'] & df['green_resp_rate_flag'] & df['green_fio2_flag'] &
         df['green_peep_flag'] & df['green_map_flag'] & df['green_pulse_flag'] &
         df['green_lactate_flag'] & df['green_hr_flag'] & _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['all_green_all_hours'] = (
         df['green_resp_spo2_flag'] & df['green_resp_rate_flag'] & df['green_fio2_flag'] &
         df['green_peep_flag'] & df['green_map_flag'] & df['green_pulse_flag'] &
         df['green_lactate_flag'] & df['green_hr_flag'] & _base
-    ).astype(int)
+    ).astype("Int64")
 
     df['all_green_weekday'] = (
         df['green_resp_spo2_flag'] & df['green_resp_rate_flag'] & df['green_fio2_flag'] &
         df['green_peep_flag'] & df['green_map_flag'] & df['green_pulse_flag'] &
         df['green_lactate_flag'] & df['green_hr_flag'] & _weekday
-    ).astype(int)
+    ).astype("Int64")
 
     df['all_green_no_red'] = (
         df['green_resp_spo2_flag'] & df['green_resp_rate_flag'] & df['green_fio2_flag'] &
         df['green_peep_flag'] & df['green_map_flag'] & df['green_pulse_flag'] &
         df['green_lactate_flag'] & df['green_hr_flag'] & (df['any_red'] == 0) & _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['all_green_no_red_all_hours'] = (
         df['green_resp_spo2_flag'] & df['green_resp_rate_flag'] & df['green_fio2_flag'] &
         df['green_peep_flag'] & df['green_map_flag'] & df['green_pulse_flag'] &
         df['green_lactate_flag'] & df['green_hr_flag'] & (df['any_red'] == 0) & _base
-    ).astype(int)
+    ).astype("Int64")
 
     df['all_green_no_red_weekday'] = (
         df['green_resp_spo2_flag'] & df['green_resp_rate_flag'] & df['green_fio2_flag'] &
         df['green_peep_flag'] & df['green_map_flag'] & df['green_pulse_flag'] &
         df['green_lactate_flag'] & df['green_hr_flag'] & (df['any_red'] == 0) & _weekday
-    ).astype(int)
+    ).astype("Int64")
 
     df['all_green_no_red_yellow'] = (
         df['green_resp_spo2_flag'] & df['green_resp_rate_flag'] & df['green_fio2_flag'] &
         df['green_peep_flag'] & df['green_map_flag'] & df['green_pulse_flag'] &
         df['green_lactate_flag'] & df['green_hr_flag'] &
         (df['any_red'] == 0) & (df['any_yellow'] == 0) & _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['any_yellow_or_green_no_red'] = (
         (df['yellow_resp_spo2_flag'] | df['yellow_fio2_flag'] | df['yellow_resp_rate_flag'] |
@@ -217,7 +217,7 @@ def compute_consensus_flags(df):
          df['green_fio2_flag'] | df['green_peep_flag'] | df['green_map_flag'] |
          df['green_pulse_flag'] | df['green_lactate_flag'] | df['green_hr_flag']) &
         (df['any_red'] == 0) & _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['any_yellow_or_green_no_red_weekday'] = (
         (df['yellow_resp_spo2_flag'] | df['yellow_fio2_flag'] | df['yellow_resp_rate_flag'] |
@@ -226,7 +226,7 @@ def compute_consensus_flags(df):
          df['green_fio2_flag'] | df['green_peep_flag'] | df['green_map_flag'] |
          df['green_pulse_flag'] | df['green_lactate_flag'] | df['green_hr_flag']) &
         (df['any_red'] == 0) & _weekday
-    ).astype(int)
+    ).astype("Int64")
 
     df['any_yellow_or_green_no_red_all_hours'] = (
         (df['yellow_resp_spo2_flag'] | df['yellow_fio2_flag'] | df['yellow_resp_rate_flag'] |
@@ -235,33 +235,33 @@ def compute_consensus_flags(df):
          df['green_fio2_flag'] | df['green_peep_flag'] | df['green_map_flag'] |
          df['green_pulse_flag'] | df['green_lactate_flag'] | df['green_hr_flag']) &
         (df['any_red'] == 0) & _base
-    ).astype(int)
+    ).astype("Int64")
 
     df['green_resp_flag'] = (
         df['green_resp_spo2_flag'] & df['green_resp_rate_flag'] &
         df['green_fio2_flag'] & df['green_peep_flag'] & _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['green_cardio_flag'] = (
         df['green_map_flag'] & df['green_pulse_flag'] &
         df['green_lactate_flag'] & df['green_hr_flag'] & _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['yellow_resp_flag'] = (
         (df['yellow_resp_spo2_flag'] | df['yellow_fio2_flag'] | df['yellow_resp_rate_flag'] |
          df['yellow_peep_flag'] | df['green_resp_spo2_flag'] | df['green_resp_rate_flag'] |
          df['green_fio2_flag'] | df['green_peep_flag']) &
         (df['any_red'] == 0) & _daytime
-    ).astype(int)
+    ).astype("Int64")
 
     df['yellow_cardio_flag'] = (
         (df['yellow_map_flag'] | df['yellow_pulse_flag'] | df['yellow_lactate_flag'] |
          df['green_map_flag'] | df['green_pulse_flag'] | df['green_lactate_flag'] | df['green_hr_flag']) &
         (df['any_red'] == 0) & _daytime
-    ).astype(int)
+    ).astype("Int64")
 
-    df['yellow_all_green'] = (df['all_green_no_red'] & (df['any_yellow'] == 0)).astype(int)
-    df['yellow_not_all_green'] = (df['any_yellow_or_green_no_red'] & (df['all_green_no_red'] == 0)).astype(int)
+    df['yellow_all_green'] = (df['all_green_no_red'] & (df['any_yellow'] == 0)).astype("Int64")
+    df['yellow_not_all_green'] = (df['any_yellow_or_green_no_red'] & (df['all_green_no_red'] == 0)).astype("Int64")
 
     return df
 
@@ -436,7 +436,7 @@ last_vent_df = (
     .max()
     .reset_index()
 )
-last_vent_df['time_from_vent'] = last_vent_df['time_from_vent'].astype(int)
+last_vent_df['time_from_vent'] = last_vent_df['time_from_vent'].astype("Int64")
 last_vent_df.rename(columns={'time_from_vent':'last_hour_on_vent'}, inplace=True)
 block_df = pd.merge(
     block_df,
@@ -447,7 +447,7 @@ block_df = pd.merge(
 
 #Get an 1 for patients alive at 28-days.
 block_df['alive28'] = block_df['death_dttm'].isna() | ((block_df['death_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds() >= (28*24*60*60))
-block_df['alive28'] = block_df['alive28'].astype(int)
+block_df['alive28'] = block_df['alive28'].astype("Int64")
 
 #Calcute VFD
 block_df['vent_free_days'] = block_df['alive28'] * (28 - block_df['last_hour_on_vent']/24)

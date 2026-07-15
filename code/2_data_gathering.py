@@ -141,7 +141,7 @@ mweight_df = weight_df[weight_df['recorded_dttm'].notna()]
 weight_df['time_diff'] = (weight_df['recorded_dttm'] - weight_df['block_vent_start_dttm']).dt.total_seconds()
 
 # Define whether measurement is before or after vent_start_time
-weight_df['before_vent_start'] = (weight_df['time_diff'] <= 0).astype(int)
+weight_df['before_vent_start'] = (weight_df['time_diff'] <= 0).astype("Int64")
 
 # Calculate absolute time difference
 weight_df['abs_time_diff'] = weight_df['time_diff'].abs()
@@ -578,7 +578,7 @@ helper.missing_summary(_temp_hourly_df, f_name='hourly_df_2_clifpy_raw')
 _temp_hourly_df = helper.convert_datetime_columns(_temp_hourly_df) #Currently clifpy implementation strips time zone but retains value.
 _temp_hourly_df = _temp_hourly_df.merge(block_df[['encounter_block','block_vent_start_dttm']], on='encounter_block',how='left')
 _temp_hourly_df['time_from_vent'] = np.ceil((_temp_hourly_df['window_end_dttm'] - _temp_hourly_df['block_vent_start_dttm']).dt.total_seconds()/3600)
-_temp_hourly_df['time_from_vent'] = _temp_hourly_df['time_from_vent'].astype(int)
+_temp_hourly_df['time_from_vent'] = _temp_hourly_df['time_from_vent'].astype("Int64")
 hourly = helper.hourly_blocks(in_df=_temp_hourly_df)
 
 
@@ -601,7 +601,7 @@ for last_col in agg_plan['last']:
     last_df = co.wide_df[co.wide_df[last_col].notna()].copy()
     last_df = last_df.merge(block_df[['encounter_block','block_vent_start_dttm']], on='encounter_block',how='left')
     last_df['time_from_vent'] = np.ceil((last_df['event_time'] - last_df['block_vent_start_dttm']).dt.total_seconds()/3600)
-    last_df['time_from_vent'] = last_df['time_from_vent'].astype(int)
+    last_df['time_from_vent'] = last_df['time_from_vent'].astype("Int64")
     log(f"-- Sort step")
     last_df = last_df.sort_values(by=['encounter_block','event_time'])[['encounter_block','time_from_vent',last_col]]
     log(f"-- Agg step")
@@ -626,7 +626,7 @@ co.wide_df.dtypes
 #Forward Fill from last for max rows
 hourly.hourly_fill('tracheostomy_max','ffill')
 hourly.hourly_fill('tracheostomy_max',False)
-hourly.df['tracheostomy_max'] = hourly.df['tracheostomy_max'].astype(int)
+hourly.df['tracheostomy_max'] = hourly.df['tracheostomy_max'].astype("Int64")
 inter = list(set(agg_plan['max']) & set(agg_plan['last']))
 for col in inter:
     log(f'Filling hourly for {col} _max and _last. Empty cells {sum(hourly.df[f'{col}_max'].isna()) + sum(hourly.df[f'{col}_last'].isna())}')
@@ -645,7 +645,7 @@ for col in inter:
 #Create vent maker and fill (1 if imv mentioned, 0 if anything, fill in otherwise.
 hourly.hourly_fill('device_category_last','ffill')
 hourly.df['hourly_on_vent'] = hourly.df['device_category_last'] == 'imv'
-hourly.df['hourly_on_vent'] = hourly.df['hourly_on_vent'].astype(int)
+hourly.df['hourly_on_vent'] = hourly.df['hourly_on_vent'].astype("Int64")
 hourly.hourly_fill('hourly_on_vent','ffill')
 
 #Med flags specifically should get back filled with zeros.
@@ -675,9 +675,9 @@ _col_rename = {
 }
 hourly.df.rename(columns=_col_rename, inplace=True)
 hourly.df['red_med_flag'] = hourly.df['red_med_flag'] > 0
-hourly.df['red_med_flag'] = hourly.df['red_med_flag'].astype(int)
+hourly.df['red_med_flag'] = hourly.df['red_med_flag'].astype("Int64")
 hourly.df['paralytics_flag'] = hourly.df['paralytics_flag'] > 0
-hourly.df['paralytics_flag'] = hourly.df['paralytics_flag'].astype(int)
+hourly.df['paralytics_flag'] = hourly.df['paralytics_flag'].astype("Int64")
 
 
 # ### RASS
@@ -703,7 +703,7 @@ hourly.addto_blocks(rass_df,'RASS',agg_func='min', fill_with='bffill')
 
 #Define coma
 hourly.df['coma'] = hourly.df['RASS_min'] < -2
-hourly.df['coma'] = hourly.df['coma'].astype(int)
+hourly.df['coma'] = hourly.df['coma'].astype("Int64")
 del rass_df
 
 
@@ -948,14 +948,14 @@ if use_mimic:
     )
 
     #Admission Year (based on estimate from anchor year
-    merged_patient_df["anchor_year_group"] = merged_patient_df["anchor_year_group"].str.slice(0, 4).astype(int) + 1 #Convert achor year group to an integer
-    merged_patient_df["admission_year"] = merged_patient_df['block_vent_start_dttm'].dt.year.astype(int) - merged_patient_df["anchor_year"] + merged_patient_df["anchor_year_group"]
+    merged_patient_df["anchor_year_group"] = merged_patient_df["anchor_year_group"].str.slice(0, 4).astype("Int64") + 1 #Convert achor year group to an integer
+    merged_patient_df["admission_year"] = merged_patient_df['block_vent_start_dttm'].dt.year.astype("Int64") - merged_patient_df["anchor_year"] + merged_patient_df["anchor_year_group"]
     
     block_df = block_df.merge(merged_patient_df[['admission_year','encounter_block']],on='encounter_block', how='left')
     
     del patient_mimic_df, merged_patient_df
 else:
-    block_df["admission_year"] = block_df['block_vent_start_dttm'].dt.year.astype(int)
+    block_df["admission_year"] = block_df['block_vent_start_dttm'].dt.year.astype("Int64")
 
 log(f"Encounters with admission year missing in final data: {sum(block_df['admission_year'].isna())}")
 print(f"Block Length: {len(block_df)}")
