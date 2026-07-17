@@ -9,7 +9,6 @@ code/__pycache__/
 *.so
 
 #R Environment
-code/initialize_renv.R
 renv/
 
 # Jupyter checkpoint

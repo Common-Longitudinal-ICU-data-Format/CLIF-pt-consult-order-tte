@@ -148,12 +148,6 @@ co.initialize(
 log(f"Total Number of unique encounters in the hospitalization table: {co.hospitalization.df['hospitalization_id'].nunique()}")
 
 
-# In[4]:
-
-
-co.hospitalization.df.head()
-
-
 # ## Cohort Identification 
 # ### (A) Age Filter
 # ### (B) Stitch Hospitalizations

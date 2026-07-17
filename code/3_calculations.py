@@ -277,6 +277,12 @@ hourly.df['time_diff'] = hourly.df['time_from_vent']
 hourly.df['time_bin'] = time_bin.classify_time_bin(hourly.df['time_diff'])
 
 
+# In[6]:
+
+
+time_bin.df.head()
+
+
 # ## Time to mobilization
 # Use mobilization data to get a few variables.
 
@@ -690,6 +696,10 @@ time_bin.df = time_bin.df[time_bin.df['encounter_block'].isin(block_df['encounte
 #Save
 path = os.path.join(output_folder,'intermediate',"block_df_3_end.parquet")
 block_df.to_parquet(path)
+#Overall Summary
+summary_df = helper.table_summary(block_df)
+path = os.path.join(output_folder,'final',"block_df_3_end_summary.csv")
+summary_df.to_csv(path)
 #Missing summary
 helper.missing_summary(block_df,f_name='block_df_3_end')
 

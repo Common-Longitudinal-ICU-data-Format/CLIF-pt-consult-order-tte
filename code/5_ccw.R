@@ -31,14 +31,14 @@ if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
 renv::load(project = work_dir)
 
 packages <- c("tidyverse", "pscl", "ggplot2", "dplyr", "openxlsx",
-              "tibble","cobalt","glue","data.table","survival","scales")
+              "tibble","cobalt","glue","data.table","survival","scales","arrow")
 
 installed <- packages %in% rownames(installed.packages())
 if (any(!installed)) install.packages(packages[!installed])
 
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
 library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)
-library(survival); library(scales)
+library(survival); library(scales); library(arrow)
 
 # ---- Paths -------------------------------------------------------------------
 setwd(dirname(this.path()))
@@ -48,7 +48,7 @@ output_folder <- file.path(work_dir, "output")
 #----- Options -----------------------------------------------------------------
 resample_N <- 10 #Effective bootstrapping resamples.
 input_file_path <- file.path(output_folder, "intermediate",
-                             "block_and_time_bins_for_stats.csv")
+                             "block_and_time_bins_for_stats.parquet")
 use_recent_start_logic <- FALSE
 use_stabilized_weights <- FALSE
 label <- "ALL" #Additional label to append at the end of output files.
@@ -67,7 +67,7 @@ make_filename <- function(name, trim_status = "NA", model_type = "NA", ext = "pd
 # =============================================================================
 # 1.  LOAD & PREP DATA
 # =============================================================================
-data <- read.csv(input_file_path)
+data <- read_parquet(input_file_path)
 
 # ---- Factorise -------------------------------
 fac_vars <- c("sex_category", "race_category", "ethnicity_category",

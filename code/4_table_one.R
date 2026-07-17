@@ -299,10 +299,9 @@ dev.off()
 ## 9. Time Bin Summary Graphs
 ## ------------------------------------------------------------------
 ## The closed time-bin data set was written out of 3_calculations.ipynb
-## as a CSV specifically for use in R (time_bins_3_end.csv).
 
-time_bin_path <- file.path(output_folder, "intermediate", "time_bins_3_end.csv")
-time_bin_df   <- read.csv(time_bin_path, stringsAsFactors = FALSE)
+time_bin_path <- file.path(output_folder, "intermediate", "time_bin_3_end.parquet")
+time_bin_df   <- read_parquet(time_bin_path, stringsAsFactors = FALSE)
 
 pt_time_bin_df <- time_bin_df %>%
   group_by(bin_start) %>%
@@ -335,5 +334,5 @@ message(sprintf("Stats data set contains %d encounter_blocks.",
 message(sprintf("Stats data set contains %d encounter_blocks.",
                  n_distinct(stats_df$encounter_block)))
 
-stats_out_path <- file.path(output_folder, "intermediate", "block_and_time_bins_for_stats.csv")
-write.csv(stats_df, stats_out_path, row.names = TRUE)
+stats_out_path <- file.path(output_folder, "intermediate", "block_and_time_bins_for_stats.parquet")
+write_parquet(stats_df, stats_out_path)

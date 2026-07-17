@@ -612,15 +612,9 @@ for last_col in agg_plan['last']:
     hourly.df = hourly.df.merge(last_df, on=['encounter_block','time_from_vent'],how='left')
 
 
-# In[21]:
-
-
-co.wide_df.dtypes
-
-
 # ### Forward and back fill
 
-# In[22]:
+# In[23]:
 
 
 #Forward Fill from last for max rows
@@ -664,7 +658,7 @@ hourly.hourly_fill('peep_set_min','bffill')
 
 # ### Create some binary flags and rename come columns
 
-# In[23]:
+# In[25]:
 
 
 _col_rename = {
@@ -683,7 +677,7 @@ hourly.df['paralytics_flag'] = hourly.df['paralytics_flag'].astype("Int64")
 # ### RASS
 # For some reason patient assessments do not seem to properly load into the wide data set so will add them the hourly manually.
 
-# In[24]:
+# In[28]:
 
 
 #Load assessments
@@ -698,7 +692,7 @@ rass_df['time_from_vent'] = hourly.calc_time_from_vent(rass_df['time_diff'])
 hourly.addto_blocks(rass_df,'RASS',agg_func='min', fill_with='bffill')
 
 
-# In[25]:
+# In[29]:
 
 
 #Define coma
@@ -709,7 +703,7 @@ del rass_df
 
 # ### Save Hourly Data
 
-# In[26]:
+# In[30]:
 
 
 #Remove negative time.
@@ -721,7 +715,7 @@ log('Completed hourly.df and saved sumary')
 
 # ## Time Bins and Other Aggregation
 
-# In[27]:
+# In[31]:
 
 
 #Create Time Bin Object
@@ -734,7 +728,7 @@ time_bin.add_event(death_df[['encounter_block','time_diff']], 'death')
 del death_df
 
 
-# In[28]:
+# In[32]:
 
 
 #Add PT consult
@@ -753,6 +747,7 @@ time_bin.df = pd.merge(
     on=['encounter_block','time_bin'],
     how='left')
 time_bin.bin_sort_fill('pt_now',0)
+
 del pt_df
 
 
