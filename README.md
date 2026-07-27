@@ -48,8 +48,10 @@ Follow the instructions in [`config/README.md`](config/README.md) to set your si
 Run the entire pipeline using the commands.
 ```
 chmod +x run_pipeline.sh   # make it executable (one time only)
-source run_pipeline.sh
+bash run_pipeline.sh
 ```
+Run it with `bash` (not `source`): the script uses `set -euo pipefail`, so if you
+`source` it, any failing step will exit your interactive shell/terminal.
 These scripts install the required Python and R dependencies.
 ### Pipeline steps
 
