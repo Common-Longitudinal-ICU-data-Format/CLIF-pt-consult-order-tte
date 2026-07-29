@@ -13,7 +13,7 @@
 
 # ## Setup
 
-# In[1]:
+# In[ ]:
 
 
 ### Import
@@ -67,7 +67,7 @@ time_bin = helper.time_bins(in_name='time_bin_step_2')
 hourly = helper.hourly_blocks(in_name='hourly_df_two')
 
 
-# In[2]:
+# In[ ]:
 
 
 _logger = logging.getLogger('clif_01')
@@ -95,7 +95,7 @@ log(f"Site: {config['site_name']}")
 # 
 # Uses hourly data frame built earlier along with algorithm by Kaveri. Original code seen here: [CLIF-eligibility-for-mobilization](https://github.com/Common-Longitudinal-ICU-data-Format/CLIF-eligibility-for-mobilization/blob/main/code/02_mobilization_analysis.py)
 
-# In[3]:
+# In[ ]:
 
 
 def compute_consensus_flags(df):
@@ -268,7 +268,7 @@ def compute_consensus_flags(df):
 hourly.df = compute_consensus_flags(hourly.df)
 
 
-# In[4]:
+# In[ ]:
 
 
 hourly.save(suffix='_w_mob')
@@ -277,7 +277,7 @@ hourly.df['time_diff'] = hourly.df['time_from_vent']
 hourly.df['time_bin'] = time_bin.classify_time_bin(hourly.df['time_diff'])
 
 
-# In[6]:
+# In[ ]:
 
 
 time_bin.df.head()
@@ -286,7 +286,7 @@ time_bin.df.head()
 # ## Time to mobilization
 # Use mobilization data to get a few variables.
 
-# In[5]:
+# In[ ]:
 
 
 yellow_df = hourly.df.rename(columns={'any_yellow_or_green_no_red_all_hours':'yellow'}).copy()
@@ -354,7 +354,7 @@ del grouped_yellow_df, yellow_df
 # ## Oversedation
 # Based on 'coma' which was defined by RASS < -2 in the second notebook.
 
-# In[6]:
+# In[ ]:
 
 
 coma_df = hourly.df[['encounter_block','time_diff','coma']].copy()
@@ -373,7 +373,7 @@ log('Calculated hours of oversedation.')
 
 # ## Pressor Data
 
-# In[7]:
+# In[ ]:
 
 
 #Pressor indicator
@@ -398,7 +398,7 @@ log('Calculated pressor use flag for time_bins.')
 
 # ## Paralytics Data
 
-# In[8]:
+# In[ ]:
 
 
 #Paralytics indicator
@@ -426,7 +426,7 @@ del para_df
 
 # ## Ventilator Data
 
-# In[9]:
+# In[ ]:
 
 
 ###VENT FREE DAYS
@@ -487,7 +487,7 @@ hourly.df['vent'] = hourly.df['hourly_on_vent']
 time_bin.gather_time_bins(hourly.df[['encounter_block','time_bin','vent']], 'vent', agg_func='flag')
 
 
-# In[10]:
+# In[ ]:
 
 
 del intubation_count_df
@@ -495,7 +495,7 @@ del last_vent_df
 del vent_df
 
 
-# In[11]:
+# In[ ]:
 
 
 #SAVING POINT
@@ -506,7 +506,7 @@ del path
 
 # ## Close Time Bins Data Set
 
-# In[12]:
+# In[ ]:
 
 
 #Censor out dead data
@@ -521,7 +521,7 @@ del path
 
 # ## Date Time Calculations
 
-# In[13]:
+# In[ ]:
 
 
 #Change relevant DTTM values to hours/days
@@ -562,7 +562,7 @@ block_df['is_dead_365'] = (block_df['death_dttm'] - block_df['block_vent_start_d
 
 # ### Language
 
-# In[14]:
+# In[ ]:
 
 
 log("LANGUAGE PRE:")
@@ -578,7 +578,7 @@ log(block_df['language_category'].value_counts(dropna=False)) #log results
 
 # ### Race
 
-# In[15]:
+# In[ ]:
 
 
 log("RACE PRE:")
@@ -593,7 +593,7 @@ log(block_df['race_category'].value_counts(dropna=False)) #log results
 
 # ### Ethnicity
 
-# In[16]:
+# In[ ]:
 
 
 #This just converts "Unknown" to None for better missingness tracking.
@@ -603,7 +603,7 @@ block_df["ethnicity_category"] = np.where(set_mask, block_df['ethnicity_category
 
 # ### ICU Type
 
-# In[17]:
+# In[ ]:
 
 
 log("ICU TYPE PRE:")
@@ -629,7 +629,7 @@ log(block_df['ICU_type'].value_counts(dropna=False))
 
 # ### Admission Category
 
-# In[18]:
+# In[ ]:
 
 
 log("ADMISSION PRE:")
@@ -649,7 +649,7 @@ log(block_df['admission_type_category'].value_counts(dropna=False))
 
 # ### Discharge Category
 
-# In[19]:
+# In[ ]:
 
 
 log("DISCHARGE PRE:")
@@ -679,7 +679,7 @@ log(block_df['discharge_category'].value_counts(dropna=False))
 # ## Remove obersvations with prior PT order
 # Remove any `encounter_block` from both `block_df` and `time_bin.df` where `pt_pre24_IMV` == `True`.
 
-# In[20]:
+# In[ ]:
 
 
 #Exclusion criteria
@@ -690,7 +690,7 @@ time_bin.df = time_bin.df[time_bin.df['encounter_block'].isin(block_df['encounte
 
 # ## Save
 
-# In[21]:
+# In[ ]:
 
 
 #Save

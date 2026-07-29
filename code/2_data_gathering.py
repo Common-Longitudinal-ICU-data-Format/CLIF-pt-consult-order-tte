@@ -9,7 +9,7 @@
 
 # ## Setup
 
-# In[1]:
+# In[ ]:
 
 
 ### Import
@@ -65,7 +65,7 @@ co = clifpy.ClifOrchestrator(
 )
 
 
-# In[2]:
+# In[ ]:
 
 
 #Create Logger
@@ -92,7 +92,7 @@ log(f"Site: {config['site_name']}")
 
 # ## Load Prior Data
 
-# In[3]:
+# In[ ]:
 
 
 #Load block data
@@ -104,7 +104,7 @@ rs_waterfall = helper.load_data('output_folder','respiratory_support_waterfall',
 rs_waterfall = rs_waterfall[rs_waterfall['encounter_block'].isin(enc_map['encounter_block'])]
 
 
-# In[4]:
+# In[ ]:
 
 
 #Initiliaze CLIF Orchestrator
@@ -126,7 +126,7 @@ co.respiratory_support.df = rs_waterfall
 
 # ### Add weight_kg
 
-# In[5]:
+# In[ ]:
 
 
 #Load the Vitals CLIF tables
@@ -169,7 +169,7 @@ log(f"Missing Weight_kg at block level: {sum(block_df['weight_kg'].isna())}")
 
 # ## Columns and Filters
 
-# In[6]:
+# In[ ]:
 
 
 rst_interest = [
@@ -239,7 +239,7 @@ pat_ass_of_interest = [
 
 # ## Load and Process Continous Medications
 
-# In[7]:
+# In[ ]:
 
 
 #Load with filter
@@ -280,7 +280,7 @@ co.medication_admin_continuous.df['med_dose'] = co.medication_admin_continuous.d
 co.medication_admin_continuous.df['med_dose_unit'] = co.medication_admin_continuous.df['med_dose_unit_converted']
 
 
-# In[8]:
+# In[ ]:
 
 
 # Create summary tables
@@ -326,7 +326,7 @@ _meds_filtered = _meds_filtered[_meds_filtered['med_dose_unit'].apply(has_per_ho
 
 # ### Pressor Dose Conversion
 
-# In[9]:
+# In[ ]:
 
 
 # ── Norepinephrine equivalent calculation ──
@@ -363,7 +363,7 @@ del _meds_filtered, _ne_df, _non_pressors
 # ### Antihypertensives & Paralytics
 # This is a bit unusual. We do not care about dose conversion because ultimately we just want to create a binary on/off flag. We are doing this inside the ClifOrchestrator data set because we want to take advantage of the optimizations of the *create_wide_dataset* function.
 
-# In[10]:
+# In[ ]:
 
 
 # Convert IV continuous antihypertensives to all be the same drug.
@@ -385,7 +385,7 @@ log(f"Found {sum(_mask)} antihypertensives and converted them all to nitroprussi
 del _sub_df
 
 
-# In[11]:
+# In[ ]:
 
 
 # Convert IV continuous paralytics to all be the same drug.
@@ -407,7 +407,7 @@ log(f"Found {sum(_mask)} paralytics and converted them all to rocuronium.")
 del _sub_df
 
 
-# In[12]:
+# In[ ]:
 
 
 #Remove all the excess columns created
@@ -417,7 +417,7 @@ co.medication_admin_continuous.df = co.medication_admin_continuous.df[meds_requi
 
 # ## Load Rest of CLIF Tables
 
-# In[13]:
+# In[ ]:
 
 
 #Load with filter
@@ -443,7 +443,7 @@ log(f"Loaded patient_assessments table. Size: {co.patient_assessments.df.shape[0
 
 # ## Create Wide Data Set
 
-# In[14]:
+# In[ ]:
 
 
 _cohort = block_df[['encounter_block','patient_id','block_vent_start_dttm','block_last_vital_dttm']]
@@ -468,7 +468,7 @@ del _cohort
 
 # ### Add MAP & RR where missing
 
-# In[15]:
+# In[ ]:
 
 
 _add_map = co.wide_df['sbp'].notna() & co.wide_df['dbp'].notna() & co.wide_df['map'].isna()
@@ -483,7 +483,7 @@ log(f'Added {sum(_add_rr)} respiratory rate rows from resp_supoprt to vitals.')
 # ## SOFA Score
 # Use the newly created wide_df
 
-# In[16]:
+# In[ ]:
 
 
 #SOFA scores
@@ -545,7 +545,7 @@ del sofa_input_df, sofa_df, sofa_wide
 
 # ## Convert Wide to Hourly Data
 
-# In[17]:
+# In[ ]:
 
 
 agg_plan = {
@@ -561,14 +561,14 @@ _temp_hourly_df = co.convert_wide_to_hourly(agg_plan,
                                             fill_gaps=True)
 
 
-# In[18]:
+# In[ ]:
 
 
 log('Hourly_df created with columns:\n',_temp_hourly_df.dtypes)
 log('Encounters in hourly_df:\n',_temp_hourly_df['encounter_block'].nunique())
 
 
-# In[19]:
+# In[ ]:
 
 
 #Missing summary before filling anything in.
@@ -592,7 +592,7 @@ hourly = helper.hourly_blocks(in_df=_temp_hourly_df)
 # 
 # An issue on GitHub has been created for this, however as of April 30, 2026 it remains open. [clifpy issue 131](https://github.com/Common-Longitudinal-ICU-data-Format/clifpy/issues/131)
 
-# In[20]:
+# In[ ]:
 
 
 for last_col in agg_plan['last']:
@@ -614,7 +614,7 @@ for last_col in agg_plan['last']:
 
 # ### Forward and back fill
 
-# In[23]:
+# In[ ]:
 
 
 #Forward Fill from last for max rows
@@ -658,7 +658,7 @@ hourly.hourly_fill('peep_set_min','bffill')
 
 # ### Create some binary flags and rename come columns
 
-# In[25]:
+# In[ ]:
 
 
 _col_rename = {
@@ -677,7 +677,7 @@ hourly.df['paralytics_flag'] = hourly.df['paralytics_flag'].astype("Int64")
 # ### RASS
 # For some reason patient assessments do not seem to properly load into the wide data set so will add them the hourly manually.
 
-# In[28]:
+# In[ ]:
 
 
 #Load assessments
@@ -692,7 +692,7 @@ rass_df['time_from_vent'] = hourly.calc_time_from_vent(rass_df['time_diff'])
 hourly.addto_blocks(rass_df,'RASS',agg_func='min', fill_with='bffill')
 
 
-# In[29]:
+# In[ ]:
 
 
 #Define coma
@@ -703,7 +703,7 @@ del rass_df
 
 # ### Save Hourly Data
 
-# In[30]:
+# In[ ]:
 
 
 #Remove negative time.
@@ -715,7 +715,7 @@ log('Completed hourly.df and saved sumary')
 
 # ## Time Bins and Other Aggregation
 
-# In[31]:
+# In[ ]:
 
 
 #Create Time Bin Object
@@ -728,7 +728,7 @@ time_bin.add_event(death_df[['encounter_block','time_diff']], 'death')
 del death_df
 
 
-# In[32]:
+# In[ ]:
 
 
 #Add PT consult
@@ -751,7 +751,7 @@ time_bin.bin_sort_fill('pt_now',0)
 del pt_df
 
 
-# In[29]:
+# In[ ]:
 
 
 #Create time columns for the wide data set
@@ -768,7 +768,7 @@ log(f'Finished creating time bins. Shape: {time_bin.df.shape}')
 # It added pre-intubation vital signs for about 10% of encounters but we still had 40% missingness so this portion of the code was removed.
 # It can still be found in old versions of the code as needed.
 
-# In[30]:
+# In[ ]:
 
 
 ##HEART RATE
@@ -785,7 +785,7 @@ log(f"Missing heart rate at time_bin level: {sum(time_bin.df['heart_rate_mean'].
 del hr_df
 
 
-# In[31]:
+# In[ ]:
 
 
 ##MAP
@@ -804,7 +804,7 @@ del map_df
 
 # ### Respiratory Support Table
 
-# In[32]:
+# In[ ]:
 
 
 #FiO2
@@ -821,7 +821,7 @@ log(f"Missing FiO2 at time_bin level: {sum(time_bin.df['fio2_set_mean'].isna())}
 del fio2_df
 
 
-# In[33]:
+# In[ ]:
 
 
 #PEEP
@@ -840,13 +840,13 @@ del peep_df
 
 # ### Patient Assessments
 
-# In[34]:
+# In[ ]:
 
 
 co.patient_assessments.df['time_bin'] = time_bin.classify_time_bin(co.patient_assessments.df['time_diff'])
 
 
-# In[35]:
+# In[ ]:
 
 
 #RASS
@@ -864,7 +864,7 @@ log(f"Missing RASS at time bin level: {sum(time_bin.df['RASS_min'].isna())}")
 del rass_df
 
 
-# In[36]:
+# In[ ]:
 
 
 #Braden Mobility Score
@@ -896,7 +896,7 @@ log(f"Missing braden (ICU last) at block level: {sum(block_df['braden_mobility_l
 del braden_df
 
 
-# In[37]:
+# In[ ]:
 
 
 #CAM-ICU
@@ -918,7 +918,7 @@ del cam_df
 # 
 # Note that this uses either ICD 9 or ICD 10 codes for any given encounter_block. There was a hard switch at some point so there should actually NO encounters with both ICD codes mixed.
 
-# In[38]:
+# In[ ]:
 
 
 #If we need to convert admission year from MIMIC date to real dates.
@@ -957,7 +957,7 @@ print(f"Block Length: {len(block_df)}")
 print(f"Unique Encounter Block: {block_df['encounter_block'].nunique()}")
 
 
-# In[39]:
+# In[ ]:
 
 
 #Load with filter
@@ -998,7 +998,7 @@ diag_df.to_parquet(path)
 
 # ## Save
 
-# In[40]:
+# In[ ]:
 
 
 #SAVING POINT
