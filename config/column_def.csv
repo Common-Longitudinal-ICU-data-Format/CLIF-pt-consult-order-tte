@@ -28,7 +28,6 @@ Time_first_PT,Time to First PT Order after IMV (hours),0,0,
 pt_ever,PT order ever after IMV,0,0,
 pt_post48_IMV,PT order within 48 hours after IMV,1,0,
 pt_between_ICU_IMV,PT order placed after IMV but before ICU admission,0,0,
-pt_pre24_IMV,PT order within 24 hours prior to IMV,0,0,exclusion
 yellow_time_eligibility,Time to Yellow Eligibility after IMV (hours),0,0,
 yellow_time_eligibility_2h,Time to Yellow Eligibility (2 hours) after IMV (hours),0,0,
 yellow_0_24h_sum,Hours of Yellow Eligibility (0-24 hours),0,0,
@@ -44,9 +43,11 @@ adm_to_discharge_days,Overall Hospital Length of Stay (days),0,0,
 imv_to_discharge_days,Post-IMV Hospital Length of Stay (days),0,1,
 discharge_category,Discharge Disposition,0,0,
 icu_los_days,ICU Length of Stay (days),0,1,poisson
+icu_los_first_days,First ICU Length of Stay from IMV (days),0,1,FG
 imv_to_death_days,Post-IMV Mortality (days),0,1,
 is_dead,Overall Mortality,0,0,
 is_dead_2,Mortality within 48 hours,0,0,
 is_dead_hosp,Hospital Mortality,0,1,logit
+is_dead_icu,Mortality in ICU or within 24 hours,0,1,FG
 is_dead_30,30-day Mortality,0,1,logit
 is_dead_365,1-year Mortality,0,1,logit

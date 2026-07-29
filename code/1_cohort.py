@@ -186,6 +186,7 @@ log(f"Number of linked hospitalization ids: {strobe_ab['B_before_stitching'] - s
 # ### (C) Identify Ventilator Usage
 # - Filter first by any hospitalization that has a single IMV reportedd.
 # - Create waterfall / hourly blocks of respiratory support data. See clifpy documentation for details of everything this entails.
+# - Identify potential extubations based on `lpm_set` not being empty.
 # - Impute missing FiO2 values
 
 # In[ ]:
@@ -217,8 +218,88 @@ from clifpy.tables.respiratory_support import RespiratorySupport
 _rs = RespiratorySupport(data=_resp_support)
 rs_waterfall = _rs.waterfall(id_col="encounter_block", verbose=True, return_dataframe=True)
 #Since we used EB to create waterfall the hosp_id's were not fowardfilled.
-rs_waterfall['hospitalization_id'] = rs_waterfall['hospitalization_id'].ffill()
+rs_waterfall['hospitalization_id'] = rs_waterfall.groupby('encounter_block')['hospitalization_id'].ffill()
 log(f"Number of rows in respiratory support waterfall: {rs_waterfall.shape[0]}")
+
+
+# In[ ]:
+
+
+#Describe extend of missing device category problem
+log(f"Number of rows missing device_category: {sum(rs_waterfall['device_category'].isna())}")
+fix_mask = rs_waterfall['device_category'].isna() & (rs_waterfall['lpm_set'] > 0) & (rs_waterfall['lpm_set'].notna())
+log(f"Of those rows, number with lpm_set: {sum(fix_mask)}")
+
+#Identify extubations
+def count_extubations(series:pd.Series):
+    """
+    input: clif_respiratory_support:device_category data series.
+    output: int
+    Counts the number of extubations as imv to non-imv transitions.
+    """
+    series_bool = series.dropna().str.contains("imv",case=False)
+    ext_bool = (~series_bool) & (series_bool.shift(periods=1, fill_value=True))
+    return sum(ext_bool)
+def extubations_describe(rs_table:pd.DataFrame):
+    """
+    input: clif_respiratory_support:device_category data series.
+    output: str
+    Describe extubation counts.
+    """
+    extubation_df = rs_table.groupby('encounter_block')['device_category'].apply(count_extubations).reset_index()
+    extubation_df.rename(columns={'device_category':'ext_n'},inplace=True)
+    return f"""EXUBATION ANALYSIS:
+            Total encounters: {extubation_df['encounter_block'].nunique()}
+            Total extubations: {extubation_df['ext_n'].sum()}
+            Encounters without extubations: {sum(extubation_df['ext_n'] < 1)}
+            Encounters with > 1 extubations: {sum(extubation_df['ext_n'] > 1)}
+            Encounters with > 2 extubations: {sum(extubation_df['ext_n'] > 2)}
+            99th percentile: {extubation_df['ext_n'].quantile(.99):.2f}"""
+log("PRE FIX EXTUBATION COUNTER")
+log(extubations_describe(rs_waterfall))
+
+#NOTE: The applied rules below are hiarcheal, meaning as one rule is applied these rows are removed from requiring a fix.
+
+#Apply trach rule
+trach_rule = fix_mask & (rs_waterfall['tracheostomy'] == 'True')
+rs_waterfall.loc[trach_rule, 'device_category'] = 'trach collar'
+fix_mask = fix_mask & ~trach_rule #Remove from list of needed to be fixed
+log(f"Implied trach collar based on tracheostomy flag {sum(trach_rule)}")
+
+#Apply NIPPV rule, assumes the lpm_set would be for bleed in.
+nippv_rule = fix_mask & ((rs_waterfall['pressure_support_set'] > 0) | (rs_waterfall['peak_inspiratory_pressure_set'] > 0))
+rs_waterfall.loc[nippv_rule, 'device_category'] = 'nippv'
+fix_mask = fix_mask & ~nippv_rule #Remove from list of needed to be fixed
+log(f"Implied NIPPV based on inspiratory pressure {sum(nippv_rule)}")
+
+#Apply CPAP rule, assumes the lpm_set would be for bleed in.
+cpap_rule = fix_mask & (rs_waterfall['peep_set'] > 0)
+rs_waterfall.loc[cpap_rule, 'device_category'] = 'cpap'
+fix_mask = fix_mask & ~cpap_rule #Remove from list of needed to be fixed
+log(f"Implied CPAP based on peep pressure {sum(cpap_rule)}")
+
+#Apply HFNC rule.
+hfnc_rule = fix_mask & (rs_waterfall['lpm_set'] > 20)
+rs_waterfall.loc[hfnc_rule, 'device_category'] = 'high flow nc'
+fix_mask = fix_mask & ~hfnc_rule #Remove from list of needed to be fixed
+log(f"Implied HFNC based on >20Lpm {sum(hfnc_rule)}")
+
+#Apply Face Mask rule.
+fm_rule = fix_mask & ((rs_waterfall['lpm_set'] > 10) | rs_waterfall['fio2_set'].notna())
+rs_waterfall.loc[fm_rule, 'device_category'] = 'face mask'
+fix_mask = fix_mask & ~fm_rule #Remove from list of needed to be fixed
+log(f"Implied face mask based on >10Lpm or Fio2 set {sum(fm_rule)}")
+
+#Apply LF rule. To all remainig (note implied that they do not meet any of the criteria above)
+rs_waterfall.loc[fix_mask, 'device_category'] = 'nasa cannula'
+log(f"Implied nasal cannula {sum(fix_mask)}")
+
+log("POST FIX EXTUBATION COUNTER")
+log(extubations_describe(rs_waterfall))
+
+
+# In[ ]:
+
 
 #Impute FIO2
 '''
@@ -802,10 +883,11 @@ block_df = pd.merge(
 )
 
 '''
-NOTE: We are not fully excluding these blocks from the analytics data set out of interest. We will keep them in the  block_df for now.
+NOTE: Remove any encounter with a pt consult in the 24 hours preceding IMV initiation.
 '''
 block_df['pt_pre24_IMV'] = block_df['pt_pre_imv_dttm'].notna() & ((block_df['block_vent_start_dttm'] - block_df['pt_pre_imv_dttm'] ).dt.total_seconds() < 24*3600)
 strobe_excl['X_blocks_with_pt_24h_prior'] = sum( block_df['pt_pre24_IMV'])
+block_df = block_df[~block_df['pt_pre24_IMV']]
 
 del _chart_mask, _pt_df, pt_pre_imv, pt_post_imv
 

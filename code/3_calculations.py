@@ -8,8 +8,6 @@
 # - Calculates outcomes
 # - Converts date_time values to hours or days as needed.
 # - Clustering of categorical values, assuming appropriate CLIF definitions.
-# - Creates a summary TABLE 1.
-# - Creates a graph.
 
 # ## Setup
 
@@ -524,6 +522,16 @@ del path
 # In[ ]:
 
 
+# Add Hospital mortality: TRUE if Death_dttm < discharge_dttm or (discharge category is hospice or dead) 
+block_df["is_dead_hosp"] = (
+    (block_df["death_dttm"] <= block_df["discharge_dttm"]) |
+    (block_df["discharge_category"].str.lower().isin(["hospice", "expired"]))
+)
+#Append death time (based on discharge category) where missing.
+fix_death_mask = block_df["is_dead_hosp"] & block_df["death_dttm"].isna()
+log(f"Hospital death without date of death: {sum(fix_death_mask)}")
+block_df.loc[fix_death_mask,'death_dttm'] = block_df.loc[fix_death_mask,'discharge_dttm']
+
 #Change relevant DTTM values to hours/days
 block_df['imv_to_discharge_days'] = (block_df['discharge_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds()/(24*3600)
 block_df['imv_to_end_hours'] = (block_df['block_vent_end_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds()/(3600)
@@ -533,6 +541,7 @@ block_df['adm_to_discharge_days'] = (block_df['discharge_dttm'] - block_df['admi
 block_df['icu_to_imv_hours'] = (block_df['block_vent_start_dttm'] - block_df['icu_in_dttm']).dt.total_seconds()/(3600) #Positive if in ICU first before IMV.
 block_df['Time_first_PT'] = (block_df['pt_post_imv_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds()/3600
 block_df['Time_last_PT'] = (block_df['pt_pre_imv_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds()/3600
+block_df['icu_los_first_days'] = (block_df['icu_first_out_dttm'] - block_df['block_vent_end_dttm']).dt.total_seconds()/(24*3600)
 
 #Add in a dichotomized outcomes variables
 block_df['pt_ever'] = block_df['pt_post_imv_dttm'].notna()
@@ -544,11 +553,8 @@ block_df['extubated_at_pt'] = block_df['imv_to_end_hours'] <= block_df['Time_fir
 block_df['is_dead'] = block_df['death_dttm'].notna()
 block_df['pt_between_ICU_IMV'] = block_df['Time_first_PT'] < (-1*block_df['icu_to_imv_hours'])
 
-# Add Hospital mortality: TRUE if Death_dttm < discharge_dttm or (discharge category is hospice or dead) 
-block_df["is_dead_hosp"] = (
-    (block_df["death_dttm"] <= block_df["discharge_dttm"]) |
-    (block_df["discharge_category"].str.lower().isin(["hospice", "expired"]))
-)
+# Add ICU mortality: TRUE if Death_dttm is within 24 hours of icu_first_out_dttm
+block_df["is_dead_icu"] = block_df["death_dttm"] <= (block_df["icu_first_out_dttm"] + pd.Timedelta(hours=24))
 #48 hour mortality (in grace period)
 block_df['is_dead_2'] = (block_df['death_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds() <= (2*24*60*60)
 #30-day mortality

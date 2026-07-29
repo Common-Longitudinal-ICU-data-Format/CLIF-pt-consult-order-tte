@@ -76,17 +76,42 @@ def load_data(data_set: str, name: str, folder: str = '', type: str = None) -> p
     df = convert_datetime_columns(df)
     return df
 
-def missing_summary(in_df:pd.DataFrame,f_name:str=None) -> pd.DataFrame:
-    def missing(x): return round(np.mean(x.isna())*100,2)
-    miss_df = in_df.agg(missing).reset_index()
-    miss_df.columns = ['column_name','missing']
-    miss_df.iloc[0] = {'column_name':'size', 'missing':in_df.shape[0]}
-    if f_name:
-        path = os.path.join(output_folder,'final',f'{f_name}_missing.csv')
-        miss_df.to_csv(path)
-        return path
+def missing_summary(in_df: pd.DataFrame, f_name=None):
+    """Percent-missing per column, broken out by `time_bin` if present.
+ 
+    Returns the summary DataFrame, or the written path if `f_name` is given.
+    """
+ 
+    def pct_missing(x):
+        return round(x.isna().mean() * 100, 2)
+ 
+    if "time_bin" in in_df.columns:
+        grouped = in_df.groupby("time_bin")
+        miss_df = (
+            grouped[in_df.columns.drop("time_bin")]
+            .agg(pct_missing)
+            .reset_index()
+            .melt(id_vars="time_bin", var_name="column_name", value_name="pct_missing")
+            .merge(grouped.size().rename("n").reset_index(), on="time_bin")
+            .sort_values(["column_name", "time_bin"])
+            .reset_index(drop=True)
+        )
     else:
-        return miss_df
+        miss_df = (
+            in_df.agg(pct_missing)
+            .rename("pct_missing")
+            .rename_axis("column_name")
+            .reset_index()
+        )
+        miss_df["n"] = len(in_df)
+ 
+    if f_name:
+        path = os.path.join(output_folder, "final", f"{f_name}_missing.csv")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        miss_df.to_csv(path, index=False)
+        return path
+ 
+    return miss_df
 
 def table_summary(in_df:pd.DataFrame) -> pd.DataFrame:
     def missing(x): return round(np.mean(x.isna())*100,2)
