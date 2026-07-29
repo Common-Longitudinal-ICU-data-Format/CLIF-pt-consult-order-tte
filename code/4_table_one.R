@@ -12,10 +12,6 @@ work_dir      <- normalizePath("..")
 if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
 renv::load(project = work_dir)
 
-packages <- c("arrow","dplyr","comorbidity")
-installed <- packages %in% rownames(installed.packages())
-if (any(!installed)) install.packages(packages[!installed])
-
 library(arrow)
 library(dplyr)
 library(comorbidity)

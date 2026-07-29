@@ -12,8 +12,8 @@ renv::init()
 # ---- Packages ----------------------------------------------------------------
 packages_to_install <- c("tidyverse", "pscl", "ggplot2", "dplyr", "openxlsx",
               "tibble", "cobalt", "this.path", "glue","data.table",
-              "survival","scales","arrow","comorbidity")
+              "survival","scales","arrow","comorbidity","timereg")
 
-renv::install(packages_to_install)
+renv::install(packages_to_install, lock=TRUE)
 # Save the project's package state:
 renv::snapshot()

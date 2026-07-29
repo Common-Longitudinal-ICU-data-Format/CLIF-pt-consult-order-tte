@@ -30,15 +30,9 @@ work_dir      <- normalizePath("..")
 if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
 renv::load(project = work_dir)
 
-packages <- c("tidyverse", "pscl", "ggplot2", "dplyr", "openxlsx",
-              "tibble","cobalt","glue","data.table","survival","scales","arrow")
-
-installed <- packages %in% rownames(installed.packages())
-if (any(!installed)) install.packages(packages[!installed])
-
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
 library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)
-library(survival); library(scales); library(arrow)
+library(scales); library(arrow); library(timereg)
 
 # ---- Paths -------------------------------------------------------------------
 setwd(dirname(this.path()))
@@ -142,15 +136,6 @@ bin_df$PT_censor_N <- bin_df$pt_order
 # Censor E: censored only at the final bin (bin_end == 48) if PT never occurred
 bin_df$PT_censor_E <- ifelse((!bin_df$pt_post48_IMV) & bin_df$bin_end == 48, 1, 0)
 
-# ---- Discharge Type for Fine Grey --------------------------------------------
-bin_df$dc_type <- factor(
-  case_when(
-    bin_df$is_dead_hosp == 1 ~ "dead",
-    TRUE                     ~ "alive"
-  ),
-  levels = c("alive", "dead")   # "alive" = censored/competing; "dead" = event
-)
-
 # =============================================================================
 # 2.  COMPLETE-CASE FILTER
 # =============================================================================
@@ -161,7 +146,7 @@ separate_complete_frames <- function(df,
   df_N$clone <- factor("N", levels = c("N", "E"))
   df_N <- df_N[order(df_N$encounter_block, df_N$time_bin), ]
   #Keep uncensored row or rows where the censoring event happens.
-  df_N <- df_N %>% filter( (PT_censor_N = 0) | (pt_now = 1))
+  df_N <- df_N %>% filter( (PT_censor_N == 0) | (pt_now == 1))
 
   vars_needed_E <- c("PT_censor_E", vars_needed)
   df_E <- df[complete.cases(df[, vars_needed_E]), ]
@@ -336,7 +321,6 @@ fit_interval_weights <- function(clone_df,
 # =============================================================================
 # 4.  COMBINE STEPS 2 & 3
 # =============================================================================
-all_vars_final <- c("encounter_block","pt_post48_IMV","clone","IPCW","dc_type", base_vars, out_vars)
 clone_and_weight <- function(bin_data) {
   #Create clone data frames
   clone_frames <- separate_complete_frames(bin_data)
@@ -360,7 +344,6 @@ clone_and_weight <- function(bin_data) {
   
   #Create one large analytic cohort
   out_df <- bind_rows(clone_frames$clones_N, clone_frames$clones_E)
-  out_df <- subset(out_df, select = all_vars_final)
   
   # Trim weights at 1st / 99th percentile
   w_cut <- quantile(out_df$IPCW, probs = c(0.01, 0.99), na.rm = TRUE)
@@ -475,6 +458,7 @@ ggsave(file.path(output_folder, "final", "graphs",
 out_boot_df <- data.frame(
   iteration  = character(),
   type       = character(), #MV versus simple
+  trimmed_wt = numeric(),
   VFD_N      = numeric(),
   VFD_E      = numeric(),
   ICU_LOS_N  = numeric(),
@@ -513,30 +497,10 @@ standardized_contrast_FG <- function(fit, data, time_point, clone_var = "clone")
   dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
   dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
   
-  # Baseline cumulative hazard, computed once (independent of n subjects),
-  # evaluated at time_point via a simple step-function lookup.
-  H0 <- basehaz(fit, centered = FALSE)
-  idx <- findInterval(time_point, H0$time)
-  H0_t <- if (idx == 0) 0 else H0$hazard[idx]
-  S0_t <- exp(-H0_t)
-  
-  # Per-subject relative risk exp(lp) at the same "zero" reference as H0,
-  # so the two combine consistently. This is one vectorized calculation,
-  # not a per-subject curve.
-  risk_E <- predict(fit, newdata = dE, type = "risk", reference = "zero")
-  risk_N <- predict(fit, newdata = dN, type = "risk", reference = "zero")
-  
-  # S_i(t) = 1 - S0(t) ^ exp(lp_i)  ->  P(dead at time_point) per subject
-  pred_E <- 1 - S0_t ^ risk_E
-  pred_N <- 1 - S0_t ^ risk_N
-  
-  tibble(
-    frac_pred_E = mean(pred_E, na.rm = TRUE),
-    frac_pred_N = mean(pred_N, na.rm = TRUE)
-  )
+  return(predict(fit, newdata = dE))
 }
 
-model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
+model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", use_trim = TRUE) {
   
   #Regression type sets the RHS of the formula
   if (type_reg == "simple") {
@@ -545,48 +509,56 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
     mv_rhs <- paste(c("clone", base_vars), collapse = " + ")
   }
   
+  if (use_trim) {
+    sample_df$IPCW_use <- sample_df$IPCW_trim
+  } else {
+    sample_df$IPCW_use <- sample_df$IPCW
+  }
+  
   #Models declared globally so they can be reviewed for the original sample.
   ##### VFD: ZINB #####
   fit_vfd       <<- zeroinfl(as.formula(paste("vent_free_days ~", mv_rhs, "| 1")),
-                               data = sample_df, dist = "negbin", weights = IPCW_trim)
+                               data = sample_df, dist = "negbin", weights = IPCW_use)
   ##### ICU LOS: Poisson #####
   fit_icu_los   <<- glm(as.formula(paste("icu_los_days ~", mv_rhs)),
-                          data = sample_df, family = poisson(),   weights = IPCW_trim)
+                          data = sample_df, family = poisson(),   weights = IPCW_use)
   ##### Hospital mortality: Binary #####
   fit_dead_hosp <<- glm(as.formula(paste("is_dead_hosp ~", mv_rhs)),
-                          data = sample_df, family = binomial(),  weights = IPCW_trim)
+                          data = sample_df, family = binomial(),  weights = IPCW_use)
   ##### 30-day mortality: Binary #####
   fit_dead_30   <<- glm(as.formula(paste("is_dead_30 ~", mv_rhs)),
-                          data = sample_df, family = binomial(),  weights = IPCW_trim)
+                          data = sample_df, family = binomial(),  weights = IPCW_use)
   ##### 1-year mortality: Binary #####
   fit_dead_365  <<- glm(as.formula(paste("is_dead_365 ~", mv_rhs)),
-                          data = sample_df, family = binomial(),  weights = IPCW_trim)
+                          data = sample_df, family = binomial(),  weights = IPCW_use)
   #### Hospital mortality: Fine-Grey (against discharge alive) ###
-  data_dead_fg <<- finegray(
-    Surv(imv_to_discharge_days, dc_type) ~.,
-    data = sample_df,
-    etype = "dead",
-    id = sample_df$eb_clone,
-    weights =  sample_df$IPCW_trim
+  #2 if dead in hospital, 1 if discharged alive, 0 if still alive after 30 days.
+  sample_df$event_dead_fg <- Event(
+    0, #Start at zero for all
+    pmin(as.integer(sample_df$imv_to_discharge_days), 30), #Event time
+    cause = (as.integer(sample_df$is_dead_hosp) + 1) * as.integer(sample_df$imv_to_discharge_days <= 30),
+    cens.code = 0 #Censoring at 30 days
   )
-  fit_dead_fg <<- coxph(
-    as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~", mv_rhs)),
-    data = data_dead_fg,
-    id = eb_clone,
-    weights = fgwt, #fgwt already incorporated IPCW based on line above.
-    robust = TRUE
-  )
+  fit_dead_fg <<- comp.risk(as.formula(paste("event_dead_fg ~ ", mv_rhs)),
+                            data = sample_df,
+                            cause = 2,
+                            model = "fg",
+                            weights = sample_df$IPCW_use,
+                            resample.iid = 0,
+                            n.sim = 0
+                           )
   
   vfd_con       <- standardized_contrast(fit_vfd, sample_df)
   icu_con       <- standardized_contrast(fit_icu_los, sample_df)
   dead_hosp_con <- standardized_contrast(fit_dead_hosp, sample_df)
   dead_30_con   <- standardized_contrast(fit_dead_30, sample_df)
   dead_365_con  <- standardized_contrast(fit_dead_365, sample_df)
-  dead_FG_30_con  <- standardized_contrast_FG(fit_dead_fg, data_dead_fg, 30)
+  # dead_FG_30_con  <- standardized_contrast_FG(fit_dead_fg, sample_df, 30)
   
   data.frame(
     iteration   = iteration_n,
     type        = type_reg,
+    trimmed_wt  = as.integer(use_trim),
     VFD_N       = vfd_con$mean_pred_N,
     VFD_E       = vfd_con$mean_pred_E,
     ICU_LOS_N   = icu_con$mean_pred_N,
@@ -596,10 +568,10 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV") {
     dead_30_N   = dead_30_con$mean_pred_N,
     dead_30_E   = dead_30_con$mean_pred_E,
     dead_365_N  = dead_365_con$mean_pred_N,
-    dead_365_E  = dead_365_con$mean_pred_E,
-    dead_FG_HR = exp(coef(fit_dead_fg)["cloneE"]),
-    dead_FG_30_N = dead_FG_30_con$frac_pred_N,
-    dead_FG_30_E = dead_FG_30_con$frac_pred_E
+    dead_365_E  = dead_365_con$mean_pred_E
+    #dead_FG_HR = exp(coef(fit_dead_fg)["cloneE"]),
+    #dead_FG_30_N = dead_FG_30_con$frac_pred_N,
+    #dead_FG_30_E = dead_FG_30_con$frac_pred_E
   )
 }
 
@@ -639,7 +611,7 @@ get_marginal_mortality_curve <- function(fit, data, times, clone_var = "clone") 
 time_grid <- 0:30
 
 # ---- Point estimate curve from the ORIGINAL (non-bootstrapped) model ----
-point_curve <- get_marginal_mortality_curve(fit_dead_fg, data_dead_fg, time_grid)
+#point_curve <- get_marginal_mortality_curve(fit_dead_fg, data_dead_fg, time_grid)
 
 # =============================================================================
 # 10.  RESULTS ORGANISATION
@@ -672,15 +644,37 @@ extract_zeroinfl_table <- function(fit, model_name) {
 }
 
 extract_finegray_table <- function(fit, model_name) {
-  sm  <- summary(fit)$coefficients
-  out <- as.data.frame(sm)
-  out$term <- rownames(out)
-  rownames(out) <- NULL
-  p_col <- grep("Pr\\(", names(out), value = TRUE)
-  out %>%
-    transmute(model = model_name, component = "main", term = term,
-              estimate = coef, hr = `exp(coef)`, se = `se(coef)`,
-              p_value = .data[[p_col]])
+  # Extract coefficients from gamma2 (the coefficient matrix)
+  coef_vec <- as.numeric(fit$gamma2[, 1])
+  coef_names <- rownames(fit$gamma2)
+  
+  # Get variance-covariance matrix
+  # timereg stores this in fit$var.gamma or compute from the iid decomposition
+  var_matrix <- fit$var.gamma
+  if (all(var_matrix == 0)) {
+    # If var.gamma is zero, estimate from B.iid
+    iid_list <- fit$B.iid
+    iid_matrix <- do.call(rbind, iid_list)
+    var_matrix <- t(iid_matrix) %*% iid_matrix / nrow(iid_matrix)
+  }
+  
+  se_vec <- sqrt(pmax(diag(var_matrix), 0))  # pmax handles near-zero values
+  
+  # Z-statistic and p-values
+  z_stat <- coef_vec / pmax(se_vec, 1e-10)
+  p_vals <- 2 * (1 - pnorm(abs(z_stat)))
+  
+  out <- tibble::tibble(
+    model = model_name,
+    component = "main",
+    term = coef_names,
+    estimate = coef_vec,
+    hr = exp(coef_vec),
+    se = se_vec,
+    p_value = p_vals
+  )
+  
+  return(out)
 }
 
 #Create tabs
@@ -800,19 +794,13 @@ save_summary_stats <- function(df, output_path) {
       x_clean <- x[!is.na(x)]
       data.frame(
         Column    = col,
-        Min       = min(x_clean),
-        P1        = quantile(x_clean, 0.01),
         P2_5      = quantile(x_clean, 0.025),
-        P5        = quantile(x_clean, 0.05),
         P25       = quantile(x_clean, 0.25),
         Median    = median(x_clean),
         Mean      = mean(x_clean),
         SD        = sd(x_clean),
         P75       = quantile(x_clean, 0.75),
-        P95       = quantile(x_clean, 0.95),
         P97_5     = quantile(x_clean, 0.975),
-        P99       = quantile(x_clean, 0.99),
-        Max       = max(x_clean),
         N         = length(x_clean),
         N_Missing = sum(is.na(x)),
         row.names = NULL
