@@ -1,28 +1,25 @@
+## =============================================================================
+## 4_table_one.R
 ## ------------------------------------------------------------------
 ## Calculate Elixhouser
 ## Table 1
 ## CIF graph and PT per time bin graph
-## ------------------------------------------------------------------
+## =============================================================================
 
 # ---- Packages ----------------------------------------------------------------
-if (!requireNamespace("this.path", quietly = TRUE)) install.packages("renv")
+if (!requireNamespace("this.path", quietly = TRUE)) install.packages("this.path")
 library(this.path)
 setwd(dirname(this.path()))
 work_dir      <- normalizePath("..")
 if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
 renv::load(project = work_dir)
+renv::restore(project = work_dir)
 
 packages <- c("arrow","dplyr","comorbidity")
-installed <- packages %in% rownames(installed.packages())
-if (any(!installed)) install.packages(packages[!installed])
 
 library(arrow)
 library(dplyr)
 library(comorbidity)
-
-## ------------------------------------------------------------------
-## 1. Read in the data
-## ------------------------------------------------------------------
 
 # ---- Paths -------------------------------------------------------------------
 setwd(dirname(this.path()))
@@ -33,12 +30,23 @@ block_file_path <- file.path(output_folder, "intermediate",
 diag_file_path <- file.path(output_folder, "intermediate",
                              "diag_codes.parquet")
 
+#----- LOGGING -----------------------------------------------------------------
+sink(file.path(output_folder,"logs", "04_table_one_log.txt"), split = TRUE)
+sink(file.path(output_folder,"logs", "04_table_one_messages.txt"), type = "message")
+sessionInfo()
+renv::status()
+
+## ------------------------------------------------------------------
+## 1. Read in the data
+## ------------------------------------------------------------------
+
 block_df <- read_parquet(block_file_path)          # one row per encounter_block
 diag_df  <- read_parquet(diag_file_path)       # long format, one row per diagnosis code
 
 ## Sanity check what's in diagnosis_code_format -- this needs to map
 ## cleanly onto "9" (ICD-9-CM) vs "10" (ICD-10) for the comorbidity package
 diag_df %>% count(diagnosis_code_format)
+
 
 ## ------------------------------------------------------------------
 ## 2. Clean codes
@@ -336,3 +344,9 @@ message(sprintf("Stats data set contains %d encounter_blocks.",
 
 stats_out_path <- file.path(output_folder, "intermediate", "block_and_time_bins_for_stats.parquet")
 write_parquet(stats_df, stats_out_path)
+
+## ------------------------------------------------------------------
+## END
+## ------------------------------------------------------------------
+sink()
+#renv::snapshot()
