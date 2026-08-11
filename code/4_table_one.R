@@ -31,8 +31,9 @@ diag_file_path <- file.path(output_folder, "intermediate",
                              "diag_codes.parquet")
 
 #----- LOGGING -----------------------------------------------------------------
-sink(file.path(output_folder,"logs", "04_table_one_log.txt"), split = TRUE)
-sink(file.path(output_folder,"logs", "04_table_one_messages.txt"), type = "message")
+sink_log <- file(file.path(output_folder,"logs", "04_table_one_log.txt"), open="wt")
+sink(sink_log, split=TRUE)
+sink(sink_log, type = "message")
 sessionInfo()
 renv::status()
 

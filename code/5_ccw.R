@@ -54,7 +54,7 @@ sessionInfo()
 renv::status()
 
 #----- Options -----------------------------------------------------------------
-resample_N <- 10 #Effective bootstrapping resamples.
+resample_N <- 5 #Effective bootstrapping resamples.
 input_file_path <- file.path(output_folder, "intermediate",
                              "block_and_time_bins_for_stats.parquet")
 use_recent_start_logic <- FALSE
@@ -574,26 +574,16 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   dead_FG_30_con  <- standardized_contrast_FG(fit_dead_fg, sample_df, 30)
   
   #### ICU LOS: Fine-Grey (against death) ###
-  #This is an inefficient model when used as a MV model.
-  #For now, use fo simple regression only
-  if (type_reg == "simple") {
-    
-    fit_icu_fg <<- cifreg(
-      as.formula(paste("Event(icu_fg_time, icu_fg_cause) ~", mv_rhs)),
-      data = as.data.frame(sample_df),
-      cens.code = 0,
-      cause = 1, #Per FG variables definitions above.
-      weights = sample_df$IPCW,
-      propodds=NULL, #This makes it into FG model
-      cens.model = ~strata(clone)
-    )
-    icu_FG_10_con  <- standardized_contrast_FG(fit_icu_fg, sample_df, 10)
-  } else {
-    icu_FG_10_con <- tibble(
-      frac_pred_E = 1.1,
-      frac_pred_N = 1.1
-    )
-  }
+  fit_icu_fg <<- cifreg(
+    as.formula(paste("Event(icu_fg_time, icu_fg_cause) ~", mv_rhs)),
+    data = as.data.frame(sample_df),
+    cens.code = 0,
+    cause = 1, #Per FG variables definitions above.
+    weights = sample_df$IPCW,
+    propodds=NULL, #This makes it into FG model
+    cens.model = ~strata(clone)
+  )
+  icu_FG_10_con  <- standardized_contrast_FG(fit_icu_fg, sample_df, 10)
   
   #Organize outcome into a single row of a data frame
   output_df <- data.frame(
@@ -780,24 +770,19 @@ bootstrap_all <- function(boot_in_df) {
     sample_df <- bootstrap_sample(boot_in_df)
     sample_df <- clone_and_weight(sample_df)
     #Run 4x regression models (original/trimmed) and (MV/simple)
+    ####### original - simple
     out_boot_df <- rbind(out_boot_df,
                          model_outcomes(sample_df,sample_i,
                                         type_reg = "simple",
                                         trimmed_weights = FALSE))
-    
-    curve_b <- get_marginal_curve(fit_icu_fg, sample_df, time_grid_icu)
-    curve_boot_icu_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_icu_original[sample_i,,"N"] <- curve_b$pred_N
-    
+    ####### trimmed - simple
     out_boot_df <- rbind(out_boot_df,
                          model_outcomes(sample_df,sample_i,
                                         type_reg = "simple",
                                         trimmed_weights = TRUE))
     
-    curve_b <- get_marginal_curve(fit_icu_fg, sample_df, time_grid_icu)
-    curve_boot_icu_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_icu_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    
+
+    ####### original - MV (with curves)
     out_boot_df <- rbind(out_boot_df,
                          model_outcomes(sample_df,sample_i,
                                         type_reg = "MV",
@@ -807,6 +792,11 @@ bootstrap_all <- function(boot_in_df) {
     curve_boot_dc_original[sample_i,,"E"] <- curve_b$pred_E
     curve_boot_dc_original[sample_i,,"N"] <- curve_b$pred_N
     
+    curve_b <- get_marginal_curve(fit_icu_fg, sample_df, time_grid_icu)
+    curve_boot_icu_original[sample_i,,"E"] <- curve_b$pred_E
+    curve_boot_icu_original[sample_i,,"N"] <- curve_b$pred_N
+    
+    ####### trimmed - MV (with curves)
     out_boot_df <- rbind(out_boot_df,
                          model_outcomes(sample_df,sample_i,
                                         type_reg = "MV",
@@ -815,6 +805,10 @@ bootstrap_all <- function(boot_in_df) {
     curve_b <- get_marginal_curve(fit_dead_fg, sample_df, time_grid_dc)
     curve_boot_dc_trimmed[sample_i,,"E"] <- curve_b$pred_E
     curve_boot_dc_trimmed[sample_i,,"N"] <- curve_b$pred_N
+    
+    curve_b <- get_marginal_curve(fit_icu_fg, sample_df, time_grid_icu)
+    curve_boot_icu_trimmed[sample_i,,"E"] <- curve_b$pred_E
+    curve_boot_icu_trimmed[sample_i,,"N"] <- curve_b$pred_N
     
     print(paste("Completed resample", sample_i))
   }
@@ -969,7 +963,6 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                      trim_status="original",
                                      model_type = "simple",
                                      ext="xlsx"))
-  curve_prime_icu_original <- get_marginal_curve(fit_icu_fg, prime_df, time_grid_icu)
   
   #-------original / MV
   outcome_now <- model_outcomes(prime_df, 0, type_reg = "MV",
@@ -980,6 +973,7 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                      model_type = "MV",
                                      ext="xlsx"))
   curve_prime_dc_original <- get_marginal_curve(fit_dead_fg, prime_df, time_grid_dc)
+  curve_prime_icu_original <- get_marginal_curve(fit_icu_fg, prime_df, time_grid_icu)
   
   #-------trimmed / simple
   outcome_now <- model_outcomes(prime_df, 0, type_reg = "simple",
@@ -989,7 +983,6 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                      trim_status="trimmed",
                                      model_type = "simple",
                                      ext="xlsx"))
-  curve_prime_icu_trimmed <- get_marginal_curve(fit_icu_fg, prime_df, time_grid_icu)
   
   #-------trimmed / MV
   outcome_now <- model_outcomes(prime_df, 0, type_reg = "MV",
@@ -1000,6 +993,7 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                      model_type = "MV",
                                      ext="xlsx"))
   curve_prime_dc_trimmed <- get_marginal_curve(fit_dead_fg, prime_df, time_grid_dc)
+  curve_prime_icu_trimmed <- get_marginal_curve(fit_icu_fg, prime_df, time_grid_icu)
   
   #Run the bootstrapping and save results
   print(paste0(label_in,": Running Bootstrapping for ",resample_N," re-samples."))

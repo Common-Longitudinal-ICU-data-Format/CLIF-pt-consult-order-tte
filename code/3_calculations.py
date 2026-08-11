@@ -541,7 +541,7 @@ block_df['adm_to_discharge_days'] = (block_df['discharge_dttm'] - block_df['admi
 block_df['icu_to_imv_hours'] = (block_df['block_vent_start_dttm'] - block_df['icu_in_dttm']).dt.total_seconds()/(3600) #Positive if in ICU first before IMV.
 block_df['Time_first_PT'] = (block_df['pt_post_imv_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds()/3600
 block_df['Time_last_PT'] = (block_df['pt_pre_imv_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds()/3600
-block_df['icu_los_first_days'] = (block_df['icu_first_out_dttm'] - block_df['block_vent_end_dttm']).dt.total_seconds()/(24*3600)
+block_df['icu_los_first_days'] = (block_df['icu_first_out_dttm'] - block_df['block_vent_start_dttm']).dt.total_seconds()/(24*3600)
 
 #Add in a dichotomized outcomes variables
 block_df['pt_ever'] = block_df['pt_post_imv_dttm'].notna()

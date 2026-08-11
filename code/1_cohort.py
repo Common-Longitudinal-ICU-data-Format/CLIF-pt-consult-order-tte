@@ -726,6 +726,14 @@ merged_adt_df = merged_adt_df[merged_adt_df['location_category']== 'icu']
 #Sort by in_dttm
 merged_adt_df= merged_adt_df.sort_values(['encounter_block','in_dttm'], ascending=True)
 
+
+# In[ ]:
+
+
+ICU_df = merged_adt_df[merged_adt_df['out_dttm'] > merged_adt_df['block_vent_start_dttm']].copy()
+ICU_df = ICU_df.drop_duplicates(subset=['encounter_block'], keep='first')
+ICU_df.rename(columns={'location_type':'ICU_type','in_dttm':'icu_in_dttm','out_dttm':'icu_first_out_dttm'}, inplace=True)
+
 #ICU Type, In Time and first out time.
 #remove anywhere the patient left before start of IMV
 ICU_df = merged_adt_df[merged_adt_df['out_dttm'] > merged_adt_df['block_vent_start_dttm']].copy()
