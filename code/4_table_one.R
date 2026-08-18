@@ -7,15 +7,11 @@
 ## =============================================================================
 
 # ---- Packages ----------------------------------------------------------------
-if (!requireNamespace("this.path", quietly = TRUE)) install.packages("this.path")
 library(this.path)
-setwd(dirname(this.path()))
-work_dir      <- normalizePath("..")
-if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
-renv::load(project = work_dir)
-renv::restore(project = work_dir)
-
-packages <- c("arrow","dplyr","comorbidity")
+if (Sys.getenv("RENV_PROJECT") == "") {
+  root <- dirname(this.path::this.path())   # adjust if script is in a subdir
+  source(file.path(root, "renv", "activate.R"))
+}
 
 library(arrow)
 library(dplyr)
@@ -36,6 +32,15 @@ sink(sink_log, split=TRUE)
 sink(sink_log, type = "message")
 sessionInfo()
 renv::status()
+
+message("RENV_PROJECT : ", Sys.getenv("RENV_PROJECT"))
+message("getwd()      : ", getwd())
+message("work_dir      : ", work_dir)
+message("lockfile     : ", renv::paths$lockfile())
+message("renv library : ", renv::paths$library())
+message(".libPaths()  :\n  ", paste(.libPaths(), collapse = "\n  "))
+message("mets found at: ", paste(find.package("mets", quiet = TRUE), collapse = ", "))
+message("mets in lock : ", "mets" %in% names(renv::lockfile_read()$Packages))
 
 ## ------------------------------------------------------------------
 ## 1. Read in the data

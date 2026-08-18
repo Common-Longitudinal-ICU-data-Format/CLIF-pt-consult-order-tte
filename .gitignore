@@ -16,9 +16,10 @@ renv/
 code/.ipynb_checkpoints
 config/.ipynb_checkpoints
 
-# MY OWN FOLDERS TO IGNORE
+# MY OWN FILES/FOLDERS TO IGNORE
 _Old Scripts/
 _Side Projects/
+batch_job_submit.sh
 
 # Config file
 config/config.json

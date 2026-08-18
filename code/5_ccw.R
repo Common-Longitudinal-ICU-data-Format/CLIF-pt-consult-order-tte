@@ -22,20 +22,15 @@
 #           (with marginal effect incidence curves)
 #   - Bootstrapping with non-parametric re-sampling with replacement.
 # NEXT STEPS:
-# Change ICU FG model to MV if possible.
+# Review
 # =============================================================================
 
 # ---- Packages ----------------------------------------------------------------
-if (!requireNamespace("this.path", quietly = TRUE)) install.packages("this.path")
 library(this.path)
-setwd(dirname(this.path()))
-work_dir      <- normalizePath("..")
-if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
-renv::load(project = work_dir)
-renv::restore(project = work_dir)
-
-packages <- c("tidyverse", "pscl", "ggplot2", "dplyr", "openxlsx",
-              "tibble","cobalt","glue","data.table","mets","scales","arrow")
+if (Sys.getenv("RENV_PROJECT") == "") {
+  root <- dirname(this.path::this.path())   # adjust if script is in a subdir
+  source(file.path(root, "renv", "activate.R"))
+}
 
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
 library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)

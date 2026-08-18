@@ -61,8 +61,12 @@ if ! command -v Rscript >/dev/null 2>&1; then
   log "${RED}Rscript not found. Run steps 4 & 5 manually"
   exit 1
 else
+  #Load renv
+  cd "$PROJECT_ROOT"
+  Rscript -e 'if (length(renv::status()$missing)) renv::restore(prompt = FALSE)'
+  log "RENV loaded"
   log "========== STARTING STEP 4: Table One =========="
-  if Rscript --vanilla 4_table_one.R; then
+  if Rscript --vanilla code/4_table_one.R; then
     log "Step 4: Table One ran successfully"
   else
     log "${RED}Step 4: Table One FAILED"
@@ -70,7 +74,7 @@ else
   fi
 
   log "========== STARTING STEP 5: CCW =========="
-  if Rscript --vanilla 5_ccw.R; then
+  if Rscript --vanilla code/5_ccw.R; then
     log "Step 5: CCW ran successfully"
   else
     log "${RED}Step 5: CCW FAILED"
