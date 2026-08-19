@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════════════════
-#  run_pipeline.sh — Execute the full CLIF-pt-consult-order-tte pipeline
+#  run_just_r.sh — Execute only the R steps of the pipeline
 #
 #  Steps:
-#    1. Python  01_cohort.ipynb -> Python
-#    2. Python  02_data_gathering.ipynb -> Python
-#    3. Python  03_calculations.ipynb -> Python
 #    4. R       04_table_one.R
 #    5. R       05_ccw.R
 #
-#  Usage:  bash run_pipeline.sh
+#  Usage:  bash run_just_r.sh
 # ════════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -31,30 +28,6 @@ log "${CYAN}${BOLD} CLIF PT Consult-order-tte Pipeline${RESET}"
 log "Started: $(date)"
 log "Log: ${LOG_FILE}"
 log ""
-
-# ── environment (uv) ─────────────────────────────────────────────────────────
-if ! command -v uv >/dev/null 2>&1; then
-  log "${RED}uv not found. Install it: https://docs.astral.sh/uv/getting-started/installation/${RESET}"
-  exit 1
-fi
-
-log "Syncing dependencies with uv..."
-uv sync --project "${PROJECT_ROOT}" 2>&1 | tee -a "$LOG_FILE"
-log "${GREEN}uv environment ready${RESET}"
-log ""
-
-# ── python pipeline (cwd = code/ so relative paths work) ──────────────────────
-cd "${PROJECT_ROOT}/code"
-
-log "========== STARTING STEP 1: COHORT =========="
-uv run python 1_cohort.py
-log "Step 1: Cohort ran"
-log "========== STARTING STEP 2: DATA GATHERING =========="
-uv run python 2_data_gathering.py
-log "Step 2: Data Gathering ran"
-log "========== STARTING STEP 3: CALCULATIONS =========="
-uv run python 3_calculations.py
-log "Step 3: Calculations ran"
 
 # ── environment (renv) ─────────────────────────────────────────────────────────
 if ! command -v Rscript >/dev/null 2>&1; then

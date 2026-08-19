@@ -8,39 +8,29 @@
 
 # ---- Packages ----------------------------------------------------------------
 library(this.path)
-if (Sys.getenv("RENV_PROJECT") == "") {
-  root <- dirname(this.path::this.path())   # adjust if script is in a subdir
-  source(file.path(root, "renv", "activate.R"))
-}
-
 library(arrow)
 library(dplyr)
 library(comorbidity)
 
 # ---- Paths -------------------------------------------------------------------
-setwd(dirname(this.path()))
-work_dir      <- normalizePath("..")
+work_dir      <- dirname(dirname(this.path()))
+setwd(work_dir)
 output_folder <- file.path(work_dir, "output")
 block_file_path <- file.path(output_folder, "intermediate",
                              "block_df_3_end.parquet")
 diag_file_path <- file.path(output_folder, "intermediate",
                              "diag_codes.parquet")
+if (!interactive()) pdf(NULL) #Remove automatic plots
 
 #----- LOGGING -----------------------------------------------------------------
 sink_log <- file(file.path(output_folder,"logs", "04_table_one_log.txt"), open="wt")
 sink(sink_log, split=TRUE)
 sink(sink_log, type = "message")
-sessionInfo()
-renv::status()
 
-message("RENV_PROJECT : ", Sys.getenv("RENV_PROJECT"))
+sessionInfo()
 message("getwd()      : ", getwd())
 message("work_dir      : ", work_dir)
-message("lockfile     : ", renv::paths$lockfile())
-message("renv library : ", renv::paths$library())
 message(".libPaths()  :\n  ", paste(.libPaths(), collapse = "\n  "))
-message("mets found at: ", paste(find.package("mets", quiet = TRUE), collapse = ", "))
-message("mets in lock : ", "mets" %in% names(renv::lockfile_read()$Packages))
 
 ## ------------------------------------------------------------------
 ## 1. Read in the data

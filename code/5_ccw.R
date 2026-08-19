@@ -27,26 +27,21 @@
 
 # ---- Packages ----------------------------------------------------------------
 library(this.path)
-if (Sys.getenv("RENV_PROJECT") == "") {
-  root <- dirname(this.path::this.path())   # adjust if script is in a subdir
-  source(file.path(root, "renv", "activate.R"))
-}
-
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
 library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)
 library(mets); library(scales); library(arrow)
 
 # ---- Paths -------------------------------------------------------------------
-setwd(dirname(this.path()))
-work_dir      <- normalizePath("..")
+work_dir      <- dirname(dirname(this.path()))
+setwd(work_dir)
 output_folder <- file.path(work_dir, "output")
+if (!interactive()) pdf(NULL) #Remove automatic plots
 
 #----- LOGGING -----------------------------------------------------------------
 sink_log <- file(file.path(output_folder,"logs", "05_ccw_log.txt"), open="wt")
 sink(sink_log, split=TRUE)
 sink(sink_log, type = "message")
 sessionInfo()
-renv::status()
 
 #----- Options -----------------------------------------------------------------
 resample_N <- 5 #Effective bootstrapping resamples.
