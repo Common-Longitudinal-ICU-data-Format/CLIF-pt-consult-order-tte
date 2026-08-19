@@ -20,17 +20,6 @@
       ],
       "Hash": "dbfa2adb83f8063640982459e153f650"
     },
-    "KernSmooth": {
-      "Package": "KernSmooth",
-      "Version": "2.23-26",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "stats"
-      ],
-      "Hash": "2fb39782c07b5ad422b0448ae83f64c4"
-    },
     "MASS": {
       "Package": "MASS",
       "Version": "7.3-66",
@@ -243,18 +232,6 @@
       ],
       "Hash": "1e0ae40898be928695fd90a80e816253"
     },
-    "boot": {
-      "Package": "boot",
-      "Version": "1.3-32",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "graphics",
-        "stats"
-      ],
-      "Hash": "d39b147eb7fe9df64a1a55f72346360c"
-    },
     "broom": {
       "Package": "broom",
       "Version": "1.0.13",
@@ -347,19 +324,6 @@
       ],
       "Hash": "86cbe221fc19b56242f6c3eb0d4c5ab5"
     },
-    "class": {
-      "Package": "class",
-      "Version": "7.3-23",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "MASS",
-        "R",
-        "stats",
-        "utils"
-      ],
-      "Hash": "d0cb9cc838c3b43560bd958fc4317fdc"
-    },
     "cli": {
       "Package": "cli",
       "Version": "3.6.6",
@@ -380,20 +344,6 @@
         "utils"
       ],
       "Hash": "cc6e507cf89f11ffc44b32519e0198da"
-    },
-    "cluster": {
-      "Package": "cluster",
-      "Version": "2.1.8.3",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "grDevices",
-        "graphics",
-        "stats",
-        "utils"
-      ],
-      "Hash": "e366f7ceff2974710ca493d370307484"
     },
     "cobalt": {
       "Package": "cobalt",
@@ -628,19 +578,6 @@
         "tibble"
       ],
       "Hash": "f884a14605c6a9eb01db676eee793ba7"
-    },
-    "foreign": {
-      "Package": "foreign",
-      "Version": "0.8-91",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "methods",
-        "stats",
-        "utils"
-      ],
-      "Hash": "562817f5340990d955a0ab0fc7a1389d"
     },
     "fs": {
       "Package": "fs",
@@ -1105,23 +1042,6 @@
       ],
       "Hash": "0db22a301bbb077f88b125d69bc042ea"
     },
-    "mgcv": {
-      "Package": "mgcv",
-      "Version": "1.9-4",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "Matrix",
-        "R",
-        "graphics",
-        "methods",
-        "nlme",
-        "splines",
-        "stats",
-        "utils"
-      ],
-      "Hash": "347e906be9f134c45ee8ed36430cad5a"
-    },
     "mime": {
       "Package": "mime",
       "Version": "0.13",
@@ -1161,32 +1081,6 @@
         "utils"
       ],
       "Hash": "f12b9432ec251666c49e7d01f1aff3c7"
-    },
-    "nlme": {
-      "Package": "nlme",
-      "Version": "3.1-170",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "graphics",
-        "lattice",
-        "stats",
-        "utils"
-      ],
-      "Hash": "7c5f45696bbb3aabd85bd7bfac5d4e33"
-    },
-    "nnet": {
-      "Package": "nnet",
-      "Version": "7.3-20",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "stats",
-        "utils"
-      ],
-      "Hash": "c955edf99ff24a32e96bd0a22645af60"
     },
     "numDeriv": {
       "Package": "numDeriv",
@@ -1507,19 +1401,6 @@
       ],
       "Hash": "f34039d57d861d2869cbf9be813ed08e"
     },
-    "rpart": {
-      "Package": "rpart",
-      "Version": "4.1.27",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "grDevices",
-        "graphics",
-        "stats"
-      ],
-      "Hash": "6095ec53de916fe55028e08b1afc3810"
-    },
     "rstudioapi": {
       "Package": "rstudioapi",
       "Version": "0.19.0",
@@ -1589,19 +1470,6 @@
         "R6"
       ],
       "Hash": "c538f20abf5a9a4ab8fac8f1ee3f50e8"
-    },
-    "spatial": {
-      "Package": "spatial",
-      "Version": "7.3-18",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "graphics",
-        "stats",
-        "utils"
-      ],
-      "Hash": "b383e36583d9f80270751c490439189c"
     },
     "stringi": {
       "Package": "stringi",

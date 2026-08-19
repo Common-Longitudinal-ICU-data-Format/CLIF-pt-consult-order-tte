@@ -67,7 +67,7 @@ for (pkg in packages_to_install) {
 #                    referenced by existing project code (default "implicit"
 #                    would silently omit most of packages_to_install).
 # prompt = FALSE  -> overwrite renv.lock without asking.
-renv::snapshot(type = "all", prompt = FALSE)
+renv::snapshot(type = "implicit", prompt = FALSE)
 
 # ---- Report -----------------------------------------------------------------
 locked <- names(renv::lockfile_read()$Packages)
