@@ -44,7 +44,7 @@ sink(sink_log, type = "message")
 sessionInfo()
 
 #----- Options -----------------------------------------------------------------
-resample_N <- 100 #Effective bootstrapping resamples.
+resample_N <- 50 #Effective bootstrapping resamples.
 run_sub_group <- FALSE
 input_file_path <- file.path(output_folder, "intermediate",
                              "block_and_time_bins_for_stats.parquet")

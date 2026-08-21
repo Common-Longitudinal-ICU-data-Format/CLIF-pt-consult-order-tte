@@ -514,12 +514,8 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   #Regression type sets the RHS of the formula
   if (type_reg == "simple") {
     mv_rhs <- 'clone'
-    mv_rhs_fg <- 'clone'
   } else {
     mv_rhs <- paste(c("clone", base_vars), collapse = " + ")
-    mv_rhs_fg <- paste(c("clone",
-                         paste0(paste0("const(",base_vars),")")),
-                       collapse = " + ")
   }
   
   #Trimmed versus untrimmed weights
@@ -558,7 +554,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   
   #### Hospital mortality: Fine-Grey (against discharge alive) ###
   fit_dead_fg <<- cifreg(
-    as.formula(paste("Event(dc_fg_time, dc_fg_cause) ~", mv_rhs_fg)),
+    as.formula(paste("Event(dc_fg_time, dc_fg_cause) ~", mv_rhs)),
     data = as.data.frame(sample_df),
     cens.code = 0,
     cause = 1, #Per FG variables definitions above.
@@ -570,7 +566,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   
   #### ICU LOS: Fine-Grey (against death) ###
   fit_icu_fg <<- cifreg(
-    as.formula(paste("Event(icu_fg_time, icu_fg_cause) ~", mv_rhs_fg)),
+    as.formula(paste("Event(icu_fg_time, icu_fg_cause) ~", mv_rhs)),
     data = as.data.frame(sample_df),
     cens.code = 0,
     cause = 1, #Per FG variables definitions above.
