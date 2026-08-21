@@ -33,6 +33,7 @@ code/output/
 code/log
 code/logs
 *.log
+slurm*.out
 
 # Distribution / packaging
 .Python

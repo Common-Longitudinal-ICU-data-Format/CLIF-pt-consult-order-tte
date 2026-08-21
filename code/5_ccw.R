@@ -29,7 +29,7 @@
 library(this.path)
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
 library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)
-library(mets); library(scales); library(arrow)
+library(mets); library(scales); library(arrow); library(survival)
 
 # ---- Paths -------------------------------------------------------------------
 work_dir      <- dirname(dirname(this.path()))
@@ -57,8 +57,8 @@ icu_los_horizon <- 30
 #   (label)_(name)_(trimmed|original)_(simple|MV).(ext)
 # For outputs that aren't tied to a simple-vs-MV regression (e.g. diagnostic
 # plots), pass model_type = NULL to drop that slot entirely.
-make_filename <- function(name, label_in, trim_status = "NA",
-                          model_type = "NA", ext = "pdf")
+make_filename <- function(name, label_in, trim_status = NULL,
+                          model_type = NULL, ext = "pdf")
   {
   parts <- c(label_in, name, trim_status, model_type)
   parts <- parts[!vapply(parts, is.null, logical(1))]
@@ -513,8 +513,12 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   #Regression type sets the RHS of the formula
   if (type_reg == "simple") {
     mv_rhs <- 'clone'
+    mv_rhs_fg <- 'clone'
   } else {
     mv_rhs <- paste(c("clone", base_vars), collapse = " + ")
+    mv_rhs_fg <- paste(c("clone",
+                         paste0(paste0("const(",base_vars),")")),
+                       collapse = " + ")
   }
   
   #Trimmed versus untrimmed weights
@@ -553,7 +557,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   
   #### Hospital mortality: Fine-Grey (against discharge alive) ###
   fit_dead_fg <<- cifreg(
-    as.formula(paste("Event(dc_fg_time, dc_fg_cause) ~", mv_rhs)),
+    as.formula(paste("Event(dc_fg_time, dc_fg_cause) ~", mv_rhs_fg)),
     data = as.data.frame(sample_df),
     cens.code = 0,
     cause = 1, #Per FG variables definitions above.
@@ -565,7 +569,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   
   #### ICU LOS: Fine-Grey (against death) ###
   fit_icu_fg <<- cifreg(
-    as.formula(paste("Event(icu_fg_time, icu_fg_cause) ~", mv_rhs)),
+    as.formula(paste("Event(icu_fg_time, icu_fg_cause) ~", mv_rhs_fg)),
     data = as.data.frame(sample_df),
     cens.code = 0,
     cause = 1, #Per FG variables definitions above.
@@ -617,7 +621,9 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
 }
 
 # =============================================================================
-# 7. Marginal Fine-Gray Predicted Curves for clone E vs clone N
+# 7. CIF Curves for clone E vs clone N
+#- The marginal curves are for predictive models (ie. Fine-Gray)
+#- The Aalen-Johansen curves are for weighted observed data.
 # =============================================================================
 
 time_grid_dc <- 0:dc_horizon
@@ -642,6 +648,36 @@ get_marginal_curve <- function(fit, data, times, clone_var = "clone") {
   )
 }
 
+get_aj_curve <- function(treat, time_to, cause, weights, times) {
+  #Input the arrays separately for treatment, time_to (event) and cause.
+  #Assumes cuase = 1 is the event of interest
+  #times is the array to plot over time
+  data <- data.frame(treat = treat, time = time_to, cause=cause, weight=weights)
+  
+  #Weighted survival fit
+  fit_aj <- survfit(Surv(time, cause, type="mstate") ~ treat,
+                     data = data, weights = weight, 
+                     conf.type="none", robust=TRUE)
+  
+  # extend = TRUE carries the last estimate forward past the final event
+  # time instead of dropping those rows
+  s <- summary(fit_aj, times = times, extend = TRUE)
+  
+  est   <- s$pstate[, "1"]
+  strat <- sub("^treat=", "", as.character(s$strata))
+  parts <- split(est, strat)
+  
+  if (!all(lengths(parts) == length(times))) {
+    stop("strata returned uneven lengths: ",
+         paste(names(parts), lengths(parts), sep = "=", collapse = ", "))
+  }
+  
+  tibble(
+    time  = times,
+    pred_E = parts[["E"]],
+    pred_N = parts[["N"]]
+  )
+}
 # =============================================================================
 # 8.  RESULTS ORGANISATION
 # Save the regression models for the original data set
@@ -743,6 +779,7 @@ bootstrap_sample <- function(df, block_col = "encounter_block") {
 
 bootstrap_all <- function(boot_in_df) {
   # ---- Bootstrap curves for confidence bands ----
+  #FG curves
   curve_boot_dc_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
                       dimnames = list(NULL, NULL, c("E", "N")))
   curve_boot_dc_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
@@ -752,6 +789,17 @@ bootstrap_all <- function(boot_in_df) {
                                   dimnames = list(NULL, NULL, c("E", "N")))
   curve_boot_icu_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
                                  dimnames = list(NULL, NULL, c("E", "N")))
+  #AJ curves
+  curve_boot_aj_dc_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
+                                  dimnames = list(NULL, NULL, c("E", "N")))
+  curve_boot_aj_dc_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
+                                 dimnames = list(NULL, NULL, c("E", "N")))
+  
+  curve_boot_aj_icu_original <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
+                                   dimnames = list(NULL, NULL, c("E", "N")))
+  curve_boot_aj_icu_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
+                                  dimnames = list(NULL, NULL, c("E", "N")))
+  
   
   #Create an outcomes data frame for bootstrapping
   out_boot_df <- data.frame()
@@ -800,6 +848,39 @@ bootstrap_all <- function(boot_in_df) {
     curve_boot_icu_trimmed[sample_i,,"E"] <- curve_b$pred_E
     curve_boot_icu_trimmed[sample_i,,"N"] <- curve_b$pred_N
     
+    #Plot AJ curves
+    curve_b <- get_aj_curve(sample_df$clone,
+                            sample_df$dc_fg_time,
+                            sample_df$dc_fg_cause,
+                            sample_df$IPCW,
+                            time_grid_dc)
+    curve_boot_aj_dc_original[sample_i,,"E"] <- curve_b$pred_E
+    curve_boot_aj_dc_original[sample_i,,"N"] <- curve_b$pred_N
+    
+    curve_b <- get_aj_curve(sample_df$clone,
+                            sample_df$icu_fg_time,
+                            sample_df$icu_fg_cause,
+                            sample_df$IPCW,
+                            time_grid_icu)
+    curve_boot_aj_icu_original[sample_i,,"E"] <- curve_b$pred_E
+    curve_boot_aj_icu_original[sample_i,,"N"] <- curve_b$pred_N
+    
+    curve_b <- curve_b <- get_aj_curve(sample_df$clone,
+                                       sample_df$dc_fg_time,
+                                       sample_df$dc_fg_cause,
+                                       sample_df$IPCW_trim,
+                                       time_grid_dc)
+    curve_boot_dc_trimmed[sample_i,,"E"] <- curve_b$pred_E
+    curve_boot_dc_trimmed[sample_i,,"N"] <- curve_b$pred_N
+    
+    curve_b <- get_aj_curve(sample_df$clone,
+                            sample_df$icu_fg_time,
+                            sample_df$icu_fg_cause,
+                            sample_df$IPCW_trim,
+                            time_grid_icu)
+    curve_boot_aj_icu_trimmed[sample_i,,"E"] <- curve_b$pred_E
+    curve_boot_aj_icu_trimmed[sample_i,,"N"] <- curve_b$pred_N
+    
     print(paste("Completed resample", sample_i))
   }
   
@@ -807,7 +888,11 @@ bootstrap_all <- function(boot_in_df) {
               curve_dc_original = curve_boot_dc_original,
               curve_dc_trimmed = curve_boot_dc_trimmed,
               curve_icu_original = curve_boot_icu_original,
-              curve_icu_trimmed = curve_boot_icu_trimmed))
+              curve_icu_trimmed = curve_boot_icu_trimmed,
+              curve_aj_dc_original = curve_boot_aj_dc_original,
+              curve_aj_dc_trimmed = curve_boot_aj_dc_trimmed,
+              curve_aj_icu_original = curve_boot_aj_icu_original,
+              curve_aj_icu_trimmed = curve_boot_aj_icu_trimmed))
 }
 # =============================================================================
 # 10.  BOOTSTRAPPING RESULTS
@@ -941,6 +1026,28 @@ run_pipeline <- function(pipe_in_df,label_in) {
   print(paste0(label_in,": Analyzing Weights"))
   analyze_ipcw(prime_df, weights_E, weights_N, label_in)
   
+  #Plot weighted mortality AJ curves (no regression)
+  curve_prime_aj_dc_original <- get_aj_curve(prime_df$clone,
+                                       prime_df$dc_fg_time,
+                                       prime_df$dc_fg_cause,
+                                       prime_df$IPCW,
+                                       time_grid_dc)
+  curve_prime_aj_dc_trimmed <- get_aj_curve(prime_df$clone,
+                                       prime_df$dc_fg_time,
+                                       prime_df$dc_fg_cause,
+                                       prime_df$IPCW_trim,
+                                       time_grid_dc)
+  curve_prime_aj_icu_original <- get_aj_curve(prime_df$clone,
+                                       prime_df$icu_fg_time,
+                                       prime_df$icu_fg_cause,
+                                       prime_df$IPCW,
+                                       time_grid_icu)
+  curve_prime_aj_icu_trimmed <- get_aj_curve(prime_df$clone,
+                                      prime_df$icu_fg_time,
+                                      prime_df$icu_fg_cause,
+                                      prime_df$IPCW_trim,
+                                      time_grid_icu)
+  
   #Run the four outcomes types on the primary data.
   #For each outcome save the regression results and the curves (MV only)
   
@@ -990,7 +1097,7 @@ run_pipeline <- function(pipe_in_df,label_in) {
   boots_results <- bootstrap_all(pipe_in_df)
   save_boots_excel(boots_results$outcome_df, label_in)
   
-  #Create the survival curves
+  #Create FG predicted survival curves
   print(paste0(label_in,": Plotting FG Curves"))
   plot_marginal_curves(curve_prime_dc_original,
                        boots_results$curve_dc_original,
@@ -998,7 +1105,7 @@ run_pipeline <- function(pipe_in_df,label_in) {
                        title_in = "Predicted Hospital Mortality CIF (original)",
                        file_name = make_filename("mortality_curve",label_in,
                                                  trim_status="original",
-                                                 model_type = NULL,
+                                                 model_type = "MV",
                                                  ext="pdf"))
   plot_marginal_curves(curve_prime_dc_trimmed,
                        boots_results$curve_dc_trimmed,
@@ -1006,7 +1113,7 @@ run_pipeline <- function(pipe_in_df,label_in) {
                        title_in = "Predicted Hospital Mortality CIF (trimmed)",
                        file_name = make_filename("mortality_curve",label_in,
                                                  trim_status="trimmed",
-                                                 model_type = NULL,
+                                                 model_type = "MV",
                                                  ext="pdf"))
   
   plot_marginal_curves(curve_prime_icu_original,
@@ -1015,7 +1122,7 @@ run_pipeline <- function(pipe_in_df,label_in) {
                        title_in = "Predicted ICU LOS CIF (original)",
                        file_name = make_filename("icu_curve",label_in,
                                                  trim_status="original",
-                                                 model_type = NULL,
+                                                 model_type = "MV",
                                                  ext="pdf"))
   plot_marginal_curves(curve_prime_icu_trimmed,
                        boots_results$curve_icu_trimmed,
@@ -1023,7 +1130,43 @@ run_pipeline <- function(pipe_in_df,label_in) {
                        title_in = "Predicted ICU LOS CIF (trimmed)",
                        file_name = make_filename("icu_curve",label_in,
                                                  trim_status="trimmed",
-                                                 model_type = NULL,
+                                                 model_type = "MV",
+                                                 ext="pdf"))
+  
+  #Create AJ weighted survival curves
+  print(paste0(label_in,": Plotting AJ Curves"))
+  plot_marginal_curves(curve_prime_aj_dc_original,
+                       boots_results$curve_aj_dc_original,
+                       time_grid_dc,
+                       title_in = "Weighted Hospital Mortality CIF (original)",
+                       file_name = make_filename("mortality_curve",label_in,
+                                                 trim_status="original",
+                                                 model_type = "AJ",
+                                                 ext="pdf"))
+  plot_marginal_curves(curve_prime_aj_dc_trimmed,
+                       boots_results$curve_aj_dc_trimmed,
+                       time_grid_dc,
+                       title_in = "Weighted Hospital Mortality CIF (trimmed)",
+                       file_name = make_filename("mortality_curve",label_in,
+                                                 trim_status="trimmed",
+                                                 model_type = "AJ",
+                                                 ext="pdf"))
+  
+  plot_marginal_curves(curve_prime_aj_icu_original,
+                       boots_results$curve_aj_icu_original,
+                       time_grid_icu,
+                       title_in = "Weighted ICU LOS CIF (original)",
+                       file_name = make_filename("icu_curve",label_in,
+                                                 trim_status="original",
+                                                 model_type = "AJ",
+                                                 ext="pdf"))
+  plot_marginal_curves(curve_prime_aj_icu_trimmed,
+                       boots_results$curve_aj_icu_trimmed,
+                       time_grid_icu,
+                       title_in = "Weighted ICU LOS CIF (trimmed)",
+                       file_name = make_filename("icu_curve",label_in,
+                                                 trim_status="trimmed",
+                                                 model_type = "AJ",
                                                  ext="pdf"))
   
   print(paste0(label_in,": DONE"))
@@ -1050,4 +1193,3 @@ run_pipeline(bin_85,"85")
 sink(type = "message")
 sink()
 close(sink_log)
-#renv::snapshot()
