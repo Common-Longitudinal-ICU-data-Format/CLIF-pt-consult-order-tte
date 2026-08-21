@@ -29,7 +29,7 @@
 library(this.path)
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
 library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)
-library(mets); library(scales); library(arrow); library(survival)
+library(timereg); library(scales); library(arrow); library(survival)
 
 # ---- Paths -------------------------------------------------------------------
 work_dir      <- dirname(dirname(this.path()))
@@ -44,7 +44,7 @@ sink(sink_log, type = "message")
 sessionInfo()
 
 #----- Options -----------------------------------------------------------------
-resample_N <- 50 #Effective bootstrapping resamples.
+resample_N <- 100 #Effective bootstrapping resamples.
 run_sub_group <- FALSE
 input_file_path <- file.path(output_folder, "intermediate",
                              "block_and_time_bins_for_stats.parquet")
@@ -491,21 +491,65 @@ standardized_contrast <- function(fit, data, clone_var = "clone") {
   return(pred)
 }
 
+# -----------------------------------------------------------------------------
+# Fine-Gray helpers for timereg::comp.risk(..., model = "prop")
+# -----------------------------------------------------------------------------
+# The fitted model is
+#     P(T <= t, cause = 1 | X, Z) = 1 - exp( -exp( X'A(t) + Z'gamma ) )
+#   X : terms NOT wrapped in const() -> non-parametric, time-varying cumulative
+#       coefficients A(t), stored in fit$cum (first column is time)
+#   Z : terms wrapped in const()     -> constant log subdistribution hazard
+#       ratios, stored in fit$gamma
+# With mv_rhs_fg as built above, `clone` is in X and the baseline covariates
+# are in Z.
+
+#Per-subject predicted CIF, returned as a [subjects x times] matrix -- the same
+#shape predict.cifreg()$cif used to return.
+fg_predict_cif <- function(fit, newdata, times) {
+  p <- predict(fit, newdata = as.data.frame(newdata), times = times,
+               se = FALSE, uniform = FALSE, resample.iid = 0)
+  cif <- p$P1
+  if (is.null(dim(cif))) cif <- matrix(cif, nrow = nrow(newdata))
+
+  #Before the first jump time every cumulative coefficient is 0, and the
+  #cloglog link maps 0 to 1 - exp(-1) = 0.63 rather than 0.  The CIF is 0 by
+  #definition there, so blank those columns out -- the plotting grids start at
+  #t = 0, so without this every curve would start at ~0.6 instead of 0.
+  t_first <- min(fit$cum[, 1], na.rm = TRUE)
+  before  <- times < t_first
+  if (any(before)) cif[, before] <- 0
+
+  cif
+}
+
+#Log subdistribution hazard ratio for one term, as a length-1 named vector.
+#  const() term -> its constant coefficient from fit$gamma
+#  otherwise    -> the cumulative coefficient B(t) from fit$cum, at `time`
+#                  (default: the last estimated time point)
+fg_log_shr <- function(fit, term = "cloneE", time = NULL) {
+  if (!is.null(fit$gamma)) {
+    g <- as.numeric(fit$gamma)
+    names(g) <- rownames(fit$gamma)
+    if (term %in% names(g)) return(setNames(g[[term]], term))
+  }
+  if (term %in% colnames(fit$cum)) {
+    tt  <- fit$cum[, 1]
+    idx <- if (is.null(time)) length(tt) else max(1L, sum(tt <= time))
+    return(setNames(fit$cum[idx, term], term))
+  }
+  setNames(NA_real_, term)
+}
+
 #Function to calculate treatment effect with FG model + data
-# Adapted for mets::cifreg objects (class "cifreg"/"phreg")
+# Adapted for timereg::comp.risk objects.  Same arguments and the same one-row
+# tibble (frac_pred_E / frac_pred_N) as the mets::cifreg version; the actual
+# prediction is delegated to get_marginal_curve() so there is a single
+# standardisation implementation.
 standardized_contrast_FG <- function(fit, data, time_point, clone_var = "clone") {
-  dE <- data; dN <- data
-  dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
-  dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
-  
-  # predict.cifreg returns $cif directly at the requested time(s) -- no need
-  # to manually combine baseline hazard with per-subject relative risk.
-  pred_E <- predict(fit, newdata = dE, times = time_point)$cif[, 1]
-  pred_N <- predict(fit, newdata = dN, times = time_point)$cif[, 1]
-  
+  curve <- get_marginal_curve(fit, data, time_point, clone_var = clone_var)
   tibble(
-    frac_pred_E = mean(pred_E, na.rm = TRUE),
-    frac_pred_N = mean(pred_N, na.rm = TRUE)
+    frac_pred_E = curve$pred_E[1],
+    frac_pred_N = curve$pred_N[1]
   )
 }
 
@@ -557,26 +601,37 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   dead_365_con  <- standardized_contrast(fit_dead_365, sample_df)
   
   #### Hospital mortality: Fine-Grey (against discharge alive) ###
-  fit_dead_fg <<- cifreg(
-    as.formula(paste("Event(dc_fg_time, dc_fg_cause) ~", mv_rhs_fg)),
-    data = as.data.frame(sample_df),
-    cens.code = 0,
-    cause = 1, #Per FG variables definitions above.
-    weights = sample_df$IPCW,
-    propodds=NULL, #This makes it into FG model
-    cens.model = ~strata(clone)
+  #timereg::comp.risk() takes `weights` as a plain vector and needs a plain
+  #data.frame, so build that frame once and take the weights from it to
+  #guarantee the rows line up.
+  fg_data <- as.data.frame(sample_df)
+
+  #model = "prop" is the Fine-Gray model on the cloglog scale:
+  #  P(T <= t, cause = 1 | X, Z) = 1 - exp(-exp(X'A(t) + Z'gamma))
+  #Event() defaults to cens.code = 0, which matches the coding above.
+  #n.sim drives the resampling behind the non-parametric tests; set it to 0
+  #inside the bootstrap if the run time becomes a problem.
+  fit_dead_fg <<- comp.risk(
+    as.formula(paste("Event(dc_fg_time,dc_fg_cause) ~", mv_rhs_fg)),
+    data    = fg_data,
+    cause   = 1,       #Per FG variables definitions above.
+    n.sim   = 5000,
+    model   = "prop",
+    weights = fg_data$IPCW
+    #Censoring is handled by a pooled Kaplan-Meier.  For the previous
+    #cens.model = ~strata(clone) behaviour add:
+    #, cens.model = "stratKM", cens.formula = ~clone
   )
   dead_FG_30_con  <- standardized_contrast_FG(fit_dead_fg, sample_df, 30)
   
   #### ICU LOS: Fine-Grey (against death) ###
-  fit_icu_fg <<- cifreg(
-    as.formula(paste("Event(icu_fg_time, icu_fg_cause) ~", mv_rhs_fg)),
-    data = as.data.frame(sample_df),
-    cens.code = 0,
-    cause = 1, #Per FG variables definitions above.
-    weights = sample_df$IPCW,
-    propodds=NULL, #This makes it into FG model
-    cens.model = ~strata(clone)
+  fit_icu_fg <<- comp.risk(
+    as.formula(paste("Event(icu_fg_time,icu_fg_cause) ~", mv_rhs_fg)),
+    data    = fg_data,
+    cause   = 1,       #Per FG variables definitions above.
+    n.sim   = 5000,
+    model   = "prop",
+    weights = fg_data$IPCW
   )
   icu_FG_10_con  <- standardized_contrast_FG(fit_icu_fg, sample_df, 10)
   
@@ -595,7 +650,11 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
     dead_30_E   = dead_30_con$mean_pred_E,
     dead_365_N  = dead_365_con$mean_pred_N,
     dead_365_E  = dead_365_con$mean_pred_E,
-    dead_FG_HR = exp(coef(fit_dead_fg)["cloneE"]),
+    #`clone` is a non-const() term, so there is no single coefficient for it:
+    #fg_log_shr() falls back to the cumulative coefficient at the end of
+    #follow-up.  (It returns the const() coefficient instead if clone is ever
+    #wrapped in const(), so this line works either way.)
+    dead_FG_HR = exp(fg_log_shr(fit_dead_fg, "cloneE")),
     dead_FG_30_N = dead_FG_30_con$frac_pred_N,
     dead_FG_30_E = dead_FG_30_con$frac_pred_E,
     icu_FG_10_N = icu_FG_10_con$frac_pred_N,
@@ -631,21 +690,21 @@ time_grid_dc <- 0:dc_horizon
 time_grid_icu <- 0:icu_los_horizon
 
 get_marginal_curve <- function(fit, data, times, clone_var = "clone") {
-  
+
   dE <- data; dN <- data
   dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
   dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
-  
-  # predict.cifreg returns $cif as a [subjects x times] matrix directly at
-  # the requested time grid -- no need to reconstruct via baseline hazard
-  # and per-subject relative risk like the Cox-based version did.
-  cif_E <- predict(fit, newdata = dE, times = times)$cif
-  cif_N <- predict(fit, newdata = dN, times = times)$cif
-  
+
+  # G-computation / marginal standardisation: predict every subject's CIF
+  # under each clone assignment and average over the sample.  fg_predict_cif()
+  # returns a [subjects x times] matrix, exactly like predict.cifreg()$cif did.
+  cif_E <- fg_predict_cif(fit, dE, times)
+  cif_N <- fg_predict_cif(fit, dN, times)
+
   tibble(
     time   = times,
-    pred_E = colMeans(cif_E, na.rm = TRUE),
-    pred_N = colMeans(cif_N, na.rm = TRUE)
+    pred_E = as.numeric(colMeans(cif_E, na.rm = TRUE)),
+    pred_N = as.numeric(colMeans(cif_N, na.rm = TRUE))
   )
 }
 
@@ -709,23 +768,88 @@ extract_zeroinfl_table <- function(fit, model_name) {
   bind_rows(out_count, out_zero)
 }
 
-# Adapted for mets::cifreg objects -- summary.phreg stores coef/exp.coef as
-# separate matrices rather than one coxph-style coefficients data frame.
+# Adapted for timereg::comp.risk objects.  summary() on a "comprisk" object only
+# prints and returns NULL, so the table is assembled from the fit components:
+#   * fit$gamma   -> const() terms: constant log subdistribution hazard ratios
+#   * fit$cum     -> non-parametric terms: cumulative coefficients B(t)
+#   * fit$obs./pval.* -> the resampling-based non-parametric tests (need n.sim > 0)
+# Columns are the same as before (model, component, term, estimate, hr, se,
+# p_value) with one extra trailing column, `time`, holding the time point a
+# time-varying estimate refers to (NA for everything else).
 extract_finegray_table <- function(fit, model_name) {
-  s <- summary(fit)
-  coef_df <- as.data.frame(s$coef)
-  exp_df  <- as.data.frame(s$exp.coef)
-  
-  data.frame(
-    model     = model_name,
-    component = "main",
-    term      = rownames(coef_df),
-    estimate  = coef_df[["Estimate"]],
-    hr        = exp_df[["Estimate"]],
-    se        = coef_df[["S.E."]],
-    p_value   = coef_df[["P-value"]],
-    row.names = NULL
-  )
+  rows <- list()
+
+  # ---- Parametric const() terms -------------------------------------------
+  # exp(estimate) is a constant subdistribution hazard ratio.
+  if (!is.null(fit$gamma)) {
+    est <- as.numeric(fit$gamma)
+    V   <- if (!is.null(fit$robvar.gamma)) fit$robvar.gamma else fit$var.gamma
+    se  <- sqrt(diag(as.matrix(V)))
+    rows$const <- data.frame(
+      model     = model_name,
+      component = "main",
+      term      = rownames(fit$gamma),
+      estimate  = est,
+      hr        = exp(est),
+      se        = se,
+      p_value   = 2 * pnorm(-abs(est / se)),
+      time      = NA_real_,
+      row.names = NULL, stringsAsFactors = FALSE
+    )
+  }
+
+  # ---- Non-parametric (time-varying) terms ---------------------------------
+  # These have no single coefficient; report the cumulative coefficient B(t)
+  # at the last estimated time point, so exp(estimate) is the ratio of
+  # cumulative subdistribution hazards over the whole follow-up window.
+  cum <- as.matrix(fit$cum)
+  if (ncol(cum) > 1) {
+    i_last <- nrow(cum)
+    B_last <- as.numeric(cum[i_last, -1])
+    se_last <- if (!is.null(fit$var.cum)) {
+      sqrt(as.numeric(as.matrix(fit$var.cum)[i_last, -1]))
+    } else rep(NA_real_, length(B_last))
+    rows$tvar <- data.frame(
+      model     = model_name,
+      component = "time_varying_cum",
+      term      = colnames(cum)[-1],
+      estimate  = B_last,
+      hr        = exp(B_last),
+      se        = se_last,
+      p_value   = 2 * pnorm(-abs(B_last / se_last)),
+      time      = cum[i_last, 1],
+      row.names = NULL, stringsAsFactors = FALSE
+    )
+  }
+
+  # ---- Non-parametric tests ------------------------------------------------
+  # Supremum / Kolmogorov-Smirnov / Cramer-von Mises statistics from the
+  # n.sim resamples.  The statistic goes in `estimate`; hr and se are NA.
+  add_test <- function(comp, obs, pval) {
+    if (is.null(obs) || length(obs) == 0) return(NULL)
+    nm <- if (!is.null(dim(obs))) rownames(obs) else names(obs)
+    if (is.null(nm)) nm <- paste0("term", seq_along(as.numeric(obs)))
+    data.frame(
+      model     = model_name,
+      component = comp,
+      term      = nm,
+      estimate  = as.numeric(obs),
+      hr        = NA_real_,
+      se        = NA_real_,
+      p_value   = if (is.null(pval)) NA_real_ else as.numeric(pval),
+      time      = NA_real_,
+      row.names = NULL, stringsAsFactors = FALSE
+    )
+  }
+  # H0: B(t) = 0 over the whole time span (is the effect there at all?)
+  rows$sup <- add_test("np_test_significance", fit$obs.testBeq0,    fit$pval.testBeq0)
+  # H0: the effect is constant in time (i.e. a plain proportional FG effect)
+  rows$ks  <- add_test("np_test_constant_KS",  fit$obs.testBeqC,    fit$pval.testBeqC)
+  rows$cvm <- add_test("np_test_constant_CvM", fit$obs.testBeqC.is, fit$pval.testBeqC.is)
+
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
 }
 
 sumarize_regressions <- function (contrast_rows, file_name_in) {
@@ -1188,7 +1312,7 @@ if (run_sub_group) {
   
   bin_85 <- bin_df %>% filter(age >= 85)
   run_pipeline(bin_85,"85")
-  
+
 }
 
 # =============================================================================

@@ -720,28 +720,31 @@ merged_adt_df = pd.merge (
     on='encounter_block',
     how = 'inner'
 )
-#keep ICUs only
-merged_adt_df = merged_adt_df[merged_adt_df['location_category']== 'icu']
 
-#Sort by in_dttm
-merged_adt_df= merged_adt_df.sort_values(['encounter_block','in_dttm'], ascending=True)
+#Remove location_categories not considered to be transfers out (ie. procedures and radiology)
+units_not_transfer = ['radiology','procedural','dialysis']
+merged_adt_df = merged_adt_df[ ~ merged_adt_df['location_category'].str.lower().isin(units_not_transfer) ]
+
+#Keep only units that were more than an hour or an ICU
+adt_mask = ((merged_adt_df["out_dttm"] - merged_adt_df["in_dttm"]).dt.total_seconds() > 3600) | merged_adt_df['location_category'].str.contains('icu',case=False)
+merged_adt_df = merged_adt_df[adt_mask]
+
+#Keep only data after vent and sort by in_dttm
+merged_adt_df = merged_adt_df[merged_adt_df['out_dttm'] > merged_adt_df['block_vent_start_dttm']].copy()
+merged_adt_df = merged_adt_df.sort_values(['encounter_block','in_dttm'], ascending=True)
 
 
 # In[ ]:
 
 
-ICU_df = merged_adt_df[merged_adt_df['out_dttm'] > merged_adt_df['block_vent_start_dttm']].copy()
-ICU_df = ICU_df.drop_duplicates(subset=['encounter_block'], keep='first')
-ICU_df.rename(columns={'location_type':'ICU_type','in_dttm':'icu_in_dttm','out_dttm':'icu_first_out_dttm'}, inplace=True)
-
-#ICU Type, In Time and first out time.
+#ICU Type, In Time
 #remove anywhere the patient left before start of IMV
-ICU_df = merged_adt_df[merged_adt_df['out_dttm'] > merged_adt_df['block_vent_start_dttm']].copy()
+ICU_df = merged_adt_df[merged_adt_df['location_category'] == 'icu'].copy()
 ICU_df = ICU_df.drop_duplicates(subset=['encounter_block'], keep='first')
-ICU_df.rename(columns={'location_type':'ICU_type','in_dttm':'icu_in_dttm','out_dttm':'icu_first_out_dttm'}, inplace=True)
+ICU_df.rename(columns={'location_type':'ICU_type','in_dttm':'icu_in_dttm'}, inplace=True)
 #Merge back to block
 block_df = block_df.merge(
-    ICU_df[['encounter_block','ICU_type','icu_in_dttm','icu_first_out_dttm']],
+    ICU_df[['encounter_block','ICU_type','icu_in_dttm']],
     on='encounter_block',
     how='left'
 )
@@ -749,7 +752,7 @@ block_df['ICU_type'] = block_df['ICU_type'].astype(str)
 
 #ICU Out Time
 #remove anywhere the patient left before start of IMV
-ICU_df = merged_adt_df[merged_adt_df['out_dttm'] > merged_adt_df['block_vent_start_dttm']].copy()
+ICU_df = merged_adt_df[merged_adt_df['location_category'] == 'icu'].copy()
 ICU_df = ICU_df.drop_duplicates(subset=['encounter_block'], keep='last')
 ICU_df.rename(columns={'out_dttm':'icu_out_dttm'}, inplace=True)
 ICU_df = ICU_df[['encounter_block','icu_out_dttm']]
@@ -762,9 +765,10 @@ block_df = block_df.merge(
 block_df['ICU_type'] = block_df['ICU_type'].astype(str)
 
 #ICU LOS, including whole encounter block, not just post IMV
-merged_adt_df["icu_los_days"] = (merged_adt_df["out_dttm"] - merged_adt_df["in_dttm"]).dt.total_seconds() / (24*3600)
+ICU_df = merged_adt_df[merged_adt_df['location_category'] == 'icu'].copy()
+ICU_df["icu_los_days"] = (ICU_df["out_dttm"] - ICU_df["in_dttm"]).dt.total_seconds() / (24*3600)
 icu_los_df = (
-    merged_adt_df.groupby(["encounter_block"], as_index=False)
+    ICU_df.groupby(["encounter_block"], as_index=False)
     .agg(icu_los_days=("icu_los_days", "sum"))
 )
 #Merge back to blocks
@@ -774,7 +778,20 @@ block_df = block_df.merge(
     how="left"
 )
 
-del merged_adt_df, ICU_df, icu_los_df
+#First ICU discharge (based on first qualifying non ICU location) or if absent last ICU out.
+transfer_df = merged_adt_df[merged_adt_df['location_category'] != 'icu'].copy()
+transfer_df = transfer_df.drop_duplicates(subset=['encounter_block'], keep='first')
+transfer_df.rename(columns={'in_dttm':'icu_first_out_dttm'}, inplace=True)
+#Merge back to blocks
+block_df = block_df.merge(
+    transfer_df[["encounter_block", "icu_first_out_dttm"]],
+    on=["encounter_block"],
+    how="left"
+)
+#Take last ICU out if it is greater or if the transfer out time is blank
+block_df["icu_first_out_dttm"] = np.fmax(block_df["icu_first_out_dttm"], block_df['icu_out_dttm'])
+
+del merged_adt_df, ICU_df, icu_los_df, transfer_df
 
 _columns_of_interest = ['icu_in_dttm','ICU_type','icu_first_out_dttm','icu_out_dttm','icu_los_days']
 for _col in _columns_of_interest:
