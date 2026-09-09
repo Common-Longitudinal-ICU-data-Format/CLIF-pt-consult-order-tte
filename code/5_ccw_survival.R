@@ -379,12 +379,16 @@ clone_and_weight <- function(bin_data, log_summary = FALSE) {
   
   #Quick weight analytics
   if (log_summary) {
+    print(paste("Unique Encounter Blocks: ",length(unique(out_df$encounter_block))))
     print(paste("Blocks removed for missing data: ",length(clone_frames$bad_blocks)))
+    print(paste("Unique Encounter Blocks - Clone: ",length(unique(out_df$eb_clone))))
     print(paste("Missing weights: ",sum(is.na(out_df$IPCW))))
     print(paste("Infinite weights: ",sum(!is.finite(out_df$IPCW))))
     print(paste("Zero weights: ",sum(out_df$IPCW == 0)))
     print(paste("Weight summary (untrimmed): ", summary(out_df$IPCW)))
     print(paste("Weight summary (trimmed): ", summary(out_df$IPCW_trim)))
+    print(paste("Total weight (untrimmed): ",sum(out_df$IPCW)))
+    print(paste("Total weight (trimmed): ",sum(out_df$IPCW_trim)))
   }
   
   out_df <- out_df %>%
@@ -404,6 +408,28 @@ analyze_ipcw <- function(block_all, tv_e, tv_n, label_in) {
   #block_df must contain IPCW and IPCW_trim
   #tv_e and tv_n are time varying and must have time_bin and IPCW
   #label_in is string
+  
+  # ---- Final weight summary CSV (cohort / clone E / clone N x original|trimmed)
+  .g <- expand.grid(stratum = c("cohort", "E", "N"), weights = c("original", "trimmed"),
+                    stringsAsFactors = FALSE)
+  ipcw_summary <- do.call(rbind, Map(function(s, wt) {
+    d <- if (s == "cohort") block_all else block_all[block_all$clone == s, , drop = FALSE]
+    w <- if (wt == "original") d$IPCW else d$IPCW_trim
+    f <- w[is.finite(w)]
+    q <- quantile(f, c(0, .25, .5, .75, 1), na.rm = TRUE)
+    data.frame(label = label_in, stratum = s, weights = wt, n_rows = length(w),
+               n_encounter_blocks = length(unique(d$encounter_block)),
+               n_eb_clone = length(unique(d$eb_clone)),
+               n_missing = sum(is.na(w)),
+               n_infinite = sum(!is.finite(w) & !is.na(w)),
+               n_zero = sum(w == 0, na.rm = TRUE),
+               min = q[[1]], q25 = q[[2]], median = q[[3]], mean = mean(f),
+               q75 = q[[4]], max = q[[5]], total = sum(f), row.names = NULL)
+  }, .g$stratum, .g$weights))
+  write.csv(ipcw_summary,
+            file.path(output_folder, "final",
+                      make_filename("ipcw_weight_summary", label_in, ext = "csv")),
+            row.names = FALSE)
   
   #Trajectory over time plots
   ipcw_long <- bind_rows(
@@ -463,7 +489,22 @@ analyze_ipcw <- function(block_all, tv_e, tv_n, label_in) {
                                  trim_status = "trimmed")),
          plot = g1, width = 7, height = 5)
   
-  #Covariate balance plot
+  #Covariate balance plot (original)
+  bal_ccw <- bal.tab(x = block_all[, base_vars], treat = block_all$clone,
+                     weights = block_all$IPCW, method = "weighting",
+                     estimand = "ATE", s.d.denom = "pooled", un = TRUE)
+  
+  p_balance <- love.plot(bal_ccw, stats = "mean.diffs", abs = TRUE,
+                         thresholds = c(m = 0.1), var.order = "unadjusted",
+                         stars = "raw", sample.names = c("Unweighted", "Weighted"),
+                         title = "Baseline Covariate Balance Before and After IPCW (original)")
+  print(p_balance)
+  ggsave(file.path(output_folder, "final", "graphs",
+                   make_filename("balance_plot", label_in,
+                                 trim_status = "original")),
+         plot = p_balance, width = 8, height = 6)
+  
+  #Covariate balance plot (weighted)
   bal_ccw <- bal.tab(x = block_all[, base_vars], treat = block_all$clone,
                      weights = block_all$IPCW_trim, method = "weighting",
                      estimand = "ATE", s.d.denom = "pooled", un = TRUE)
@@ -471,7 +512,7 @@ analyze_ipcw <- function(block_all, tv_e, tv_n, label_in) {
   p_balance <- love.plot(bal_ccw, stats = "mean.diffs", abs = TRUE,
                          thresholds = c(m = 0.1), var.order = "unadjusted",
                          stars = "raw", sample.names = c("Unweighted", "Weighted"),
-                         title = "Baseline Covariate Balance Before and After IPCW")
+                         title = "Baseline Covariate Balance Before and After IPCW (trimmed)")
   print(p_balance)
   ggsave(file.path(output_folder, "final", "graphs",
                    make_filename("balance_plot", label_in,
@@ -1374,6 +1415,11 @@ run_pipeline <- function(pipe_in_df,label_in) {
   #Create and analyze weights for primary data
   print(paste0(label_in,": Creating Weights"))
   prime_df <- clone_and_weight(pipe_in_df, log_summary = TRUE)
+  
+  cloned_weighted_path <- file.path(output_folder, "intermediate",
+                                    make_filename("block_df_5_clone_weighted",label_in,
+                                                  ext="parquet"))
+  write_parquet(prime_df, cloned_weighted_path)
   
   #Note weights_E and weights_N get save globaly by the function above
   print(paste0(label_in,": Analyzing Weights"))
