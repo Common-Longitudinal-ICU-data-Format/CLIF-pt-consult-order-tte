@@ -45,8 +45,8 @@ Sys.time()
 sessionInfo()
 
 #----- Options -----------------------------------------------------------------
-resample_N <- 20 #Effective bootstrapping resamples.
-run_sub_group <- TRUE
+resample_N <- 500 #Effective bootstrapping resamples.
+run_sub_group <- FALSE
 input_file_path <- file.path(output_folder, "intermediate",
                              "block_and_time_bins_for_stats.parquet")
 use_recent_start_logic <- FALSE
@@ -1681,18 +1681,18 @@ run_pipeline <- function(pipe_in_df,label_in) {
   print(paste0(label_in,": DONE"))
 }
 
-#run_pipeline(bin_df,"ALL")
+run_pipeline(bin_df,"ALL")
 
 # =============================================================================
 # 13.  SUB GROUP ANALYSIS
 # =============================================================================
 
 if (run_sub_group) { 
-  #bin_65 <- bin_df %>% filter( (age >= 65) & (age < 75))
-  #run_pipeline(bin_65,"65")
+  bin_65 <- bin_df %>% filter( (age >= 65) & (age < 75))
+  run_pipeline(bin_65,"65")
   
-  #bin_75 <- bin_df %>% filter( (age >= 75) & (age < 85))
-  #run_pipeline(bin_75,"75")
+  bin_75 <- bin_df %>% filter( (age >= 75) & (age < 85))
+  run_pipeline(bin_75,"75")
   
   bin_85 <- bin_df %>% filter(age >= 85)
   run_pipeline(bin_85,"85")
