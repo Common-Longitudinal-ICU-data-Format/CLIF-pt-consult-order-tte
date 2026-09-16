@@ -45,7 +45,7 @@ Sys.time()
 sessionInfo()
 
 #----- Options -----------------------------------------------------------------
-resample_N <- 500 #Effective bootstrapping resamples.
+resample_N <- 20 #Effective bootstrapping resamples.
 run_sub_group <- TRUE
 input_file_path <- file.path(output_folder, "intermediate",
                              "block_and_time_bins_for_stats.parquet")
@@ -1159,115 +1159,132 @@ bootstrap_all <- function(boot_in_df) {
   
   #Create an outcomes data frame for bootstrapping
   out_boot_df <- data.frame()
+  regression_failure_count <- 0
 
   for (sample_i in 1:resample_N) {
     sample_df <- bootstrap_sample(boot_in_df)
     sample_df <- clone_and_weight(sample_df)
+    sample_boot_df <- data.frame()
+    
     #Run 4x regression models (original/trimmed) and (MV/simple)
+    #Use a try catch to catch any resamples that results in regression to fail.
     ####### original - simple
-    out_boot_df <- rbind(out_boot_df,
-                         model_outcomes(sample_df,sample_i,
-                                        type_reg = "simple",
-                                        trimmed_weights = FALSE))
-    ####### trimmed - simple
-    out_boot_df <- rbind(out_boot_df,
-                         model_outcomes(sample_df,sample_i,
-                                        type_reg = "simple",
-                                        trimmed_weights = TRUE))
+    regression_failure <- tryCatch({
+      sample_boot_df <- rbind(sample_boot_df,
+                           model_outcomes(sample_df,sample_i,
+                                          type_reg = "simple",
+                                          trimmed_weights = FALSE))
+      ####### trimmed - simple
+      sample_boot_df <- rbind(sample_boot_df,
+                           model_outcomes(sample_df,sample_i,
+                                          type_reg = "simple",
+                                          trimmed_weights = TRUE))
+      
+  
+      ####### original - MV (with curves)
+      sample_boot_df <- rbind(sample_boot_df,
+                           model_outcomes(sample_df,sample_i,
+                                          type_reg = "MV",
+                                          trimmed_weights = FALSE))
+      
+      curve_b <- get_marginal_curve(fit_dead_fg_surv, sample_df, time_grid_dc)
+      curve_boot_dc_surv_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_dc_surv_original[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_dead_fg_timeint, sample_df, time_grid_dc)
+      curve_boot_dc_timeint_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_dc_timeint_original[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_dead_fg_timereg, sample_df, time_grid_dc, use_timereg=TRUE)
+      curve_boot_dc_timereg_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_dc_timereg_original[sample_i,,"N"] <- curve_b$pred_N
+      
+      curve_b <- get_marginal_curve(fit_icu_fg_surv, sample_df, time_grid_icu)
+      curve_boot_icu_surv_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_icu_surv_original[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_icu_fg_timeint, sample_df, time_grid_icu)
+      curve_boot_icu_timeint_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_icu_timeint_original[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_icu_fg_timereg, sample_df, time_grid_icu, use_timereg=TRUE)
+      curve_boot_icu_timereg_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_icu_timereg_original[sample_i,,"N"] <- curve_b$pred_N
+      
+      ####### trimmed - MV (with curves)
+      sample_boot_df <- rbind(sample_boot_df,
+                           model_outcomes(sample_df,sample_i,
+                                          type_reg = "MV",
+                                          trimmed_weights = TRUE))
+      
+      curve_b <- get_marginal_curve(fit_dead_fg_surv, sample_df,
+                                    time_grid_dc, trimmed_weights = TRUE)
+      curve_boot_dc_surv_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_dc_surv_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_dead_fg_timeint, sample_df,
+                                    time_grid_dc, trimmed_weights = TRUE)
+      curve_boot_dc_timeint_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_dc_timeint_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_dead_fg_timereg, sample_df,
+                                    time_grid_dc, trimmed_weights = TRUE, use_timereg=TRUE)
+      curve_boot_dc_timereg_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_dc_timereg_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      
+      curve_b <- get_marginal_curve(fit_icu_fg_surv, sample_df,
+                                    time_grid_icu, trimmed_weights = TRUE)
+      curve_boot_icu_surv_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_icu_surv_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_icu_fg_timeint, sample_df,
+                                    time_grid_icu, trimmed_weights = TRUE)
+      curve_boot_icu_timeint_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_icu_timeint_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_icu_fg_timereg, sample_df,
+                                    time_grid_icu, trimmed_weights = TRUE, use_timereg=TRUE)
+      curve_boot_icu_timereg_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_icu_timereg_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      
+      out_boot_df <- rbind(out_boot_df, sample_boot_df)
+      print(paste("Completed resample", sample_i))
+      
+      #Plot AJ curves
+      curve_b <- get_aj_curve(sample_df$clone,
+                              sample_df$dc_fg_time,
+                              sample_df$dc_fg_cause,
+                              sample_df$IPCW,
+                              time_grid_dc)
+      curve_boot_aj_dc_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_aj_dc_original[sample_i,,"N"] <- curve_b$pred_N
+      
+      curve_b <- get_aj_curve(sample_df$clone,
+                              sample_df$icu_fg_time,
+                              sample_df$icu_fg_cause,
+                              sample_df$IPCW,
+                              time_grid_icu)
+      curve_boot_aj_icu_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_aj_icu_original[sample_i,,"N"] <- curve_b$pred_N
+      
+      curve_b <- curve_b <- get_aj_curve(sample_df$clone,
+                                         sample_df$dc_fg_time,
+                                         sample_df$dc_fg_cause,
+                                         sample_df$IPCW_trim,
+                                         time_grid_dc)
+      curve_boot_aj_dc_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_aj_dc_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      
+      curve_b <- get_aj_curve(sample_df$clone,
+                              sample_df$icu_fg_time,
+                              sample_df$icu_fg_cause,
+                              sample_df$IPCW_trim,
+                              time_grid_icu)
+      curve_boot_aj_icu_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_aj_icu_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      
+      FALSE
+    }, error = function(e) {
+      print(paste("Bootstrap sample ",sample_i," failed. Error:", conditionMessage(e)))
+      print(conditionCall(e))
+      TRUE
+    })
+    if(regression_failure) {
+      regression_failure_count <- regression_failure_count + 1
+    }
     
-
-    ####### original - MV (with curves)
-    out_boot_df <- rbind(out_boot_df,
-                         model_outcomes(sample_df,sample_i,
-                                        type_reg = "MV",
-                                        trimmed_weights = FALSE))
-    
-    curve_b <- get_marginal_curve(fit_dead_fg_surv, sample_df, time_grid_dc)
-    curve_boot_dc_surv_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_dc_surv_original[sample_i,,"N"] <- curve_b$pred_N
-    curve_b <- get_marginal_curve(fit_dead_fg_timeint, sample_df, time_grid_dc)
-    curve_boot_dc_timeint_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_dc_timeint_original[sample_i,,"N"] <- curve_b$pred_N
-    curve_b <- get_marginal_curve(fit_dead_fg_timereg, sample_df, time_grid_dc, use_timereg=TRUE)
-    curve_boot_dc_timereg_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_dc_timereg_original[sample_i,,"N"] <- curve_b$pred_N
-    
-    curve_b <- get_marginal_curve(fit_icu_fg_surv, sample_df, time_grid_icu)
-    curve_boot_icu_surv_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_icu_surv_original[sample_i,,"N"] <- curve_b$pred_N
-    curve_b <- get_marginal_curve(fit_icu_fg_timeint, sample_df, time_grid_icu)
-    curve_boot_icu_timeint_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_icu_timeint_original[sample_i,,"N"] <- curve_b$pred_N
-    curve_b <- get_marginal_curve(fit_icu_fg_timereg, sample_df, time_grid_icu, use_timereg=TRUE)
-    curve_boot_icu_timereg_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_icu_timereg_original[sample_i,,"N"] <- curve_b$pred_N
-    
-    ####### trimmed - MV (with curves)
-    out_boot_df <- rbind(out_boot_df,
-                         model_outcomes(sample_df,sample_i,
-                                        type_reg = "MV",
-                                        trimmed_weights = TRUE))
-    
-    curve_b <- get_marginal_curve(fit_dead_fg_surv, sample_df,
-                                  time_grid_dc, trimmed_weights = TRUE)
-    curve_boot_dc_surv_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_dc_surv_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    curve_b <- get_marginal_curve(fit_dead_fg_timeint, sample_df,
-                                  time_grid_dc, trimmed_weights = TRUE)
-    curve_boot_dc_timeint_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_dc_timeint_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    curve_b <- get_marginal_curve(fit_dead_fg_timereg, sample_df,
-                                  time_grid_dc, trimmed_weights = TRUE, use_timereg=TRUE)
-    curve_boot_dc_timereg_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_dc_timereg_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    
-    curve_b <- get_marginal_curve(fit_icu_fg_surv, sample_df,
-                                  time_grid_icu, trimmed_weights = TRUE)
-    curve_boot_icu_surv_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_icu_surv_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    curve_b <- get_marginal_curve(fit_icu_fg_timeint, sample_df,
-                                  time_grid_icu, trimmed_weights = TRUE)
-    curve_boot_icu_timeint_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_icu_timeint_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    curve_b <- get_marginal_curve(fit_icu_fg_timereg, sample_df,
-                                  time_grid_icu, trimmed_weights = TRUE, use_timereg=TRUE)
-    curve_boot_icu_timereg_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_icu_timereg_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    
-    #Plot AJ curves
-    curve_b <- get_aj_curve(sample_df$clone,
-                            sample_df$dc_fg_time,
-                            sample_df$dc_fg_cause,
-                            sample_df$IPCW,
-                            time_grid_dc)
-    curve_boot_aj_dc_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_aj_dc_original[sample_i,,"N"] <- curve_b$pred_N
-    
-    curve_b <- get_aj_curve(sample_df$clone,
-                            sample_df$icu_fg_time,
-                            sample_df$icu_fg_cause,
-                            sample_df$IPCW,
-                            time_grid_icu)
-    curve_boot_aj_icu_original[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_aj_icu_original[sample_i,,"N"] <- curve_b$pred_N
-    
-    curve_b <- curve_b <- get_aj_curve(sample_df$clone,
-                                       sample_df$dc_fg_time,
-                                       sample_df$dc_fg_cause,
-                                       sample_df$IPCW_trim,
-                                       time_grid_dc)
-    curve_boot_aj_dc_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_aj_dc_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    
-    curve_b <- get_aj_curve(sample_df$clone,
-                            sample_df$icu_fg_time,
-                            sample_df$icu_fg_cause,
-                            sample_df$IPCW_trim,
-                            time_grid_icu)
-    curve_boot_aj_icu_trimmed[sample_i,,"E"] <- curve_b$pred_E
-    curve_boot_aj_icu_trimmed[sample_i,,"N"] <- curve_b$pred_N
-    
-    print(paste("Completed resample", sample_i))
   }
   
   return(list(outcome_df = out_boot_df,
@@ -1286,7 +1303,8 @@ bootstrap_all <- function(boot_in_df) {
               curve_aj_dc_original = curve_boot_aj_dc_original,
               curve_aj_dc_trimmed = curve_boot_aj_dc_trimmed,
               curve_aj_icu_original = curve_boot_aj_icu_original,
-              curve_aj_icu_trimmed = curve_boot_aj_icu_trimmed))
+              curve_aj_icu_trimmed = curve_boot_aj_icu_trimmed,
+              regression_failure_count = regression_failure_count))
 }
 # =============================================================================
 # 10.  BOOTSTRAPPING RESULTS
@@ -1510,6 +1528,8 @@ run_pipeline <- function(pipe_in_df,label_in) {
   #Run the bootstrapping and save results
   print(paste0(label_in,": Running Bootstrapping for ",resample_N," re-samples."))
   boots_results <- bootstrap_all(pipe_in_df)
+  
+  print(paste0(label_in,": Bootstrap failures = ",boots_results$regression_failure_count))
   save_boots_excel(boots_results$outcome_df, label_in)
   
   #Create FG predicted survival curves
@@ -1661,22 +1681,21 @@ run_pipeline <- function(pipe_in_df,label_in) {
   print(paste0(label_in,": DONE"))
 }
 
-run_pipeline(bin_df,"ALL")
+#run_pipeline(bin_df,"ALL")
 
 # =============================================================================
 # 13.  SUB GROUP ANALYSIS
 # =============================================================================
 
 if (run_sub_group) { 
-  bin_65 <- bin_df %>% filter( (age >= 65) & (age < 75))
-  run_pipeline(bin_65,"65")
+  #bin_65 <- bin_df %>% filter( (age >= 65) & (age < 75))
+  #run_pipeline(bin_65,"65")
   
-  bin_75 <- bin_df %>% filter( (age >= 75) & (age < 85))
-  run_pipeline(bin_75,"75")
+  #bin_75 <- bin_df %>% filter( (age >= 75) & (age < 85))
+  #run_pipeline(bin_75,"75")
   
   bin_85 <- bin_df %>% filter(age >= 85)
   run_pipeline(bin_85,"85")
-
 }
 
 # =============================================================================
