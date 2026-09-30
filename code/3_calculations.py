@@ -374,9 +374,10 @@ log('Calculated hours of oversedation.')
 # In[ ]:
 
 
-#Pressor indicator
-pressor_df = hourly.df[['encounter_block','time_diff','time_bin','ne_calc_max']].copy()
+#Pressor binary indicator
+pressor_df = hourly.df[['encounter_block','time_diff','time_bin','ne_calc_max','ne_calc_mean']].copy()
 pressor_df['pressor'] = pressor_df['ne_calc_max'] > 0
+pressor_df = pressor_df.rename(columns={'ne_calc_mean':'ne_calc'}) #Simply name for the function below.
 
 #For 24 hour block data
 block_df = block_df.merge(
@@ -390,8 +391,29 @@ log('Calculated pressor use flag in the first 24-hours.')
 
 #For time bins
 time_bin.gather_time_bins(pressor_df[['encounter_block','time_bin','pressor']], 'pressor', agg_func='flag', fill_with=0)
-del pressor_df
+
 log('Calculated pressor use flag for time_bins.')
+
+
+# In[ ]:
+
+
+#Pressor mean NE equivalent dose
+
+#For 24 hour block data
+block_df = block_df.merge(
+    helper.aggregate_by_time(
+        pressor_df[['encounter_block','time_diff','ne_calc']],
+        'ne_calc',
+        agg_func='mean'),
+    on='encounter_block',
+    how='left')
+log('Calculated mean norepinephrine equivalents in the first 24-hours.')
+
+#For time bins
+time_bin.gather_time_bins(pressor_df[['encounter_block','time_bin','ne_calc']], 'ne_calc', agg_func='mean', fill_with=0)
+del pressor_df
+log('Calculated pmean norepinephrine equivalents use flag for time_bins.')
 
 
 # ## Paralytics Data

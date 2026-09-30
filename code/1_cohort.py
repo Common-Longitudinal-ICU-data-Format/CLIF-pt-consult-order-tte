@@ -65,31 +65,6 @@ with open(os.path.join(work_dir,'config','config.json'), 'r') as file:
 # to ensure the log file points to the fresh output directory.
 print("=== Output Folder Management ===")
 
-'''
-_output_old_folder = f'{output_folder}_old'
-# Check if output folder exists
-if os.path.exists(output_folder):
-    print(f"Existing output folder found: {output_folder}")
-
-    # If output_old already exists, remove it first
-    if os.path.exists(_output_old_folder):
-        print(f"Removing existing output_old folder...")
-        shutil.rmtree(_output_old_folder)
-
-    # Rename current output to output_old
-    print(f"Renaming {output_folder} -> {_output_old_folder}")
-    os.rename(output_folder, _output_old_folder)
-
-    # Log what was backed up
-    if os.path.exists(_output_old_folder):
-        _backup_size = sum(
-            os.path.getsize(os.path.join(_dirpath, _filename))
-            for _dirpath, _dirnames, _filenames in os.walk(_output_old_folder)
-            for _filename in _filenames
-        ) / (1024 * 1024)
-        print(f"Backup created: {_backup_size:.1f} MB")
-'''
-
 # Create fresh output directory structure
 print(f"Creating fresh output directory structure...")
 os.makedirs(output_folder, exist_ok=True)
@@ -220,6 +195,13 @@ rs_waterfall = _rs.waterfall(id_col="encounter_block", verbose=True, return_data
 #Since we used EB to create waterfall the hosp_id's were not fowardfilled.
 rs_waterfall['hospitalization_id'] = rs_waterfall.groupby('encounter_block')['hospitalization_id'].ffill()
 log(f"Number of rows in respiratory support waterfall: {rs_waterfall.shape[0]}")
+
+
+# In[ ]:
+
+
+#Fixes an issue of the waterfall function using a different time-zone object although the time zone is still the same.
+rs_waterfall = helper.convert_datetime_columns(rs_waterfall)
 
 
 # In[ ]:

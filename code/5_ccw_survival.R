@@ -120,7 +120,7 @@ base_vars <- c("age", "sex_category", "race_category", "ethnicity_category",
 
 # Time-varying covariates measured at each time_bin
 tv_vars <- c("heart_rate_mean", "map_mean", "fio2_set_mean", "peep_set_mean",
-             "pressor_flag", "paralytics_flag")
+             "ne_calc_mean", "paralytics_flag")
 
 # Outcome Variables
 out_vars <- c("vent_free_days","icu_los_days","is_dead_hosp","is_dead_30",
@@ -131,7 +131,7 @@ out_vars <- c("vent_free_days","icu_los_days","is_dead_hosp","is_dead_30",
 all_covars <- c(base_vars, tv_vars)
 
 # Combined covariates & columns needed for complete analysis of the CCW.
-all_vars <- c("encounter_block","time_bin","bin_start","bin_end","pt_order",
+all_vars <- c("encounter_block","patient_id","time_bin","bin_start","bin_end","pt_order",
                 "pt_now","pt_post48_IMV",base_vars, tv_vars, out_vars)
 
 bin_df <- subset(data, select = all_vars)
@@ -641,8 +641,8 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
     mv_rhs_timereg <- 'clone'
   } else {
     mv_rhs <- paste(c("clone", base_vars), collapse = " + ")
-    mv_rhs_fg_dc <- paste(mv_rhs," + clone * dc_fg_time")
-    mv_rhs_fg_icu <- paste(mv_rhs," + clone * icu_fg_time")
+    mv_rhs_fg_dc <- paste(mv_rhs," + clone * ICU_type")
+    mv_rhs_fg_icu <- paste(mv_rhs," + clone * ICU_type")
     mv_rhs_timereg <- paste(c('clone',
                               paste0(paste0('const(',base_vars),')')),
                             collapse = ' + ')
@@ -711,7 +711,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
 
   dead_FG_surv_30_con  <- standardized_contrast_FG(fit_dead_fg_surv, sample_df, 30)
   
-  #### Hospital mortality: Fine-Grey (against discharge alive, with time interaction) ###
+  #### Hospital mortality: Fine-Grey (against discharge alive, with ICU type interaction) ###
   fg_dc  <- fg_expand(sample_df, "dc_fg_time", "dc_fg_cause", mv_rhs_fg_dc)
   fit_dc <- coxph(as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~", mv_rhs_fg_dc)),
                   data    = fg_dc,
@@ -719,8 +719,8 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
                   robust  = TRUE,
                   cluster = eb_clone)
   fit_dc$fg_basehaz <- basehaz(fit_dc, centered = FALSE)
-  fit_dead_fg_timeint <<- fit_dc
-  dead_FG_timeint_30_con  <- standardized_contrast_FG(fit_dead_fg_timeint, sample_df, 30)
+  fit_dead_fg_icuint <<- fit_dc
+  dead_FG_icuint_30_con  <- standardized_contrast_FG(fit_dead_fg_icuint, sample_df, 30)
   
   #### Hospital mortality: Fine-Grey (against discharge alive, timereg package) ###
   #model = "prop" is the Fine-Gray model on the cloglog scale:
@@ -750,7 +750,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   fit_icu_fg_surv <<- fit_icu
   icu_FG_surv_10_con  <- standardized_contrast_FG(fit_icu_fg_surv, sample_df, 10)
   
-  #### ICU LOS: Fine-Grey (against death, with time interaction) ###
+  #### ICU LOS: Fine-Grey (against death, with ICU type interaction) ###
   fg_icu  <- fg_expand(sample_df, "icu_fg_time", "icu_fg_cause", mv_rhs_fg_icu)
   fit_icu <- coxph(as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~", mv_rhs_fg_icu)),
                    data    = fg_icu,
@@ -758,8 +758,8 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
                    robust  = TRUE,
                    cluster = eb_clone)
   fit_icu$fg_basehaz <- basehaz(fit_icu, centered = FALSE)
-  fit_icu_fg_timeint <<- fit_icu
-  icu_FG_timeint_10_con  <- standardized_contrast_FG(fit_icu_fg_timeint, sample_df, 10)
+  fit_icu_fg_icuint <<- fit_icu
+  icu_FG_icuint_10_con  <- standardized_contrast_FG(fit_icu_fg_icuint, sample_df, 10)
   
   #### ICU LOS: Fine-Grey (against death, timereg package) ###
   fit_icu_fg_timereg <<- comp.risk(
@@ -790,14 +790,14 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
     dead_365_E  = dead_365_con$mean_pred_E,
     dead_FG_surv_30_N = dead_FG_surv_30_con$frac_pred_N,
     dead_FG_surv_30_E = dead_FG_surv_30_con$frac_pred_E,
-    dead_FG_timeint_30_N = dead_FG_timeint_30_con$frac_pred_N,
-    dead_FG_timeint_30_E = dead_FG_timeint_30_con$frac_pred_E,
+    dead_FG_icuint_30_N = dead_FG_icuint_30_con$frac_pred_N,
+    dead_FG_icuint_30_E = dead_FG_icuint_30_con$frac_pred_E,
     dead_FG_timereg_30_N = dead_FG_timereg_30_con$frac_pred_N,
     dead_FG_timereg_30_E = dead_FG_timereg_30_con$frac_pred_E,
     icu_FG_surv_10_N = icu_FG_surv_10_con$frac_pred_N,
     icu_FG_surv_10_E = icu_FG_surv_10_con$frac_pred_E,
-    icu_FG_timeint_10_N = icu_FG_timeint_10_con$frac_pred_N,
-    icu_FG_timeint_10_E = icu_FG_timeint_10_con$frac_pred_E,
+    icu_FG_icuint_10_N = icu_FG_icuint_10_con$frac_pred_N,
+    icu_FG_icuint_10_E = icu_FG_icuint_10_con$frac_pred_E,
     icu_FG_timereg_10_N = icu_FG_timereg_10_con$frac_pred_N,
     icu_FG_timereg_10_E = icu_FG_timereg_10_con$frac_pred_E
   )
@@ -815,14 +815,14 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   output_df$dead_365_RR <- output_df$dead_365_E / output_df$dead_365_N
   output_df$dead_FG_surv_30_diff <- output_df$dead_FG_surv_30_E - output_df$dead_FG_surv_30_N
   output_df$dead_FG_surv_30_RR <- output_df$dead_FG_surv_30_E / output_df$dead_FG_surv_30_N
-  output_df$dead_FG_timeint_30_diff <- output_df$dead_FG_timeint_30_E - output_df$dead_FG_timeint_30_N
-  output_df$dead_FG_timeint_30_RR <- output_df$dead_FG_timeint_30_E / output_df$dead_FG_timeint_30_N
+  output_df$dead_FG_icuint_30_diff <- output_df$dead_FG_icuint_30_E - output_df$dead_FG_icuint_30_N
+  output_df$dead_FG_icuint_30_RR <- output_df$dead_FG_icuint_30_E / output_df$dead_FG_icuint_30_N
   output_df$dead_FG_timereg_30_diff <- output_df$dead_FG_timereg_30_E - output_df$dead_FG_timereg_30_N
   output_df$dead_FG_timereg_30_RR <- output_df$dead_FG_timereg_30_E / output_df$dead_FG_timereg_30_N
   output_df$icu_FG_surv_10_diff <- output_df$icu_FG_surv_10_E - output_df$icu_FG_surv_10_N
   output_df$icu_FG_surv_10_RR <- output_df$icu_FG_surv_10_E / output_df$icu_FG_surv_10_N
-  output_df$icu_FG_timeint_10_diff <- output_df$icu_FG_timeint_10_E - output_df$icu_FG_timeint_10_N
-  output_df$icu_FG_timeint_10_RR <- output_df$icu_FG_timeint_10_E / output_df$icu_FG_timeint_10_N
+  output_df$icu_FG_icuint_10_diff <- output_df$icu_FG_icuint_10_E - output_df$icu_FG_icuint_10_N
+  output_df$icu_FG_icuint_10_RR <- output_df$icu_FG_icuint_10_E / output_df$icu_FG_icuint_10_N
   output_df$icu_FG_timereg_10_diff <- output_df$icu_FG_timereg_10_E - output_df$icu_FG_timereg_10_N
   output_df$icu_FG_timereg_10_RR <- output_df$icu_FG_timereg_10_E / output_df$icu_FG_timereg_10_N
   
@@ -1065,10 +1065,10 @@ sumarize_regressions <- function (contrast_rows, file_name_in) {
   tab_dead_30  <- extract_glm_table(fit_dead_30,       "is_dead_30")
   tab_dead_365 <- extract_glm_table(fit_dead_365,      "is_dead_365")
   tab_dead_fg_surv <- extract_finegray_table(fit_dead_fg_surv, "dead_fg_surv")
-  tab_dead_fg_timeint <- extract_finegray_table(fit_dead_fg_timeint, "dead_fg_timeint")
+  tab_dead_fg_icuint <- extract_finegray_table(fit_dead_fg_icuint, "dead_fg_icuint")
   tab_dead_fg_timereg <- extract_finegray_table_timereg(fit_dead_fg_timereg, "dead_fg_timereg")
   tab_icu_fg_surv <- extract_finegray_table(fit_icu_fg_surv, "icu_los_fg_surv")
-  tab_icu_fg_timeint <- extract_finegray_table(fit_icu_fg_timeint, "icu_los_fg_timeint")
+  tab_icu_fg_icuint <- extract_finegray_table(fit_icu_fg_icuint, "icu_los_fg_icuint")
   tab_icu_fg_timereg <- extract_finegray_table_timereg(fit_icu_fg_timereg, "icu_los_fg_timereg")
   
   #Save to excel file
@@ -1079,10 +1079,10 @@ sumarize_regressions <- function (contrast_rows, file_name_in) {
   addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_30)
   addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
   addWorksheet(wb, "hosp_fg_survival"); writeData(wb, "hosp_fg_survival", tab_dead_fg_surv)
-  addWorksheet(wb, "hosp_fg_timeint"); writeData(wb, "hosp_fg_timeint", tab_dead_fg_timeint)
+  addWorksheet(wb, "hosp_fg_icuint"); writeData(wb, "hosp_fg_icuint", tab_dead_fg_icuint)
   addWorksheet(wb, "hosp_fg_timereg"); writeData(wb, "hosp_fg_timereg", tab_dead_fg_timereg)
   addWorksheet(wb, "ICU_fg_surv"); writeData(wb, "ICU_fg_surv", tab_icu_fg_surv)
-  addWorksheet(wb, "ICU_fg_timeint"); writeData(wb, "ICU_fg_timeint", tab_icu_fg_timeint)
+  addWorksheet(wb, "ICU_fg_icuint"); writeData(wb, "ICU_fg_icuint", tab_icu_fg_icuint)
   addWorksheet(wb, "ICU_fg_timereg"); writeData(wb, "ICU_fg_timereg", tab_icu_fg_timereg)
   addWorksheet(wb, "Predicted_Contrast"); writeData(wb, "Predicted_Contrast", contrast_rows)
   saveWorkbook(wb, file = file.path(output_folder, "final",file_name_in),
@@ -1120,9 +1120,9 @@ bootstrap_all <- function(boot_in_df) {
   curve_boot_dc_surv_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
                                   dimnames = list(NULL, NULL, c("E", "N")))
   
-  curve_boot_dc_timeint_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
+  curve_boot_dc_icuint_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
                                        dimnames = list(NULL, NULL, c("E", "N")))
-  curve_boot_dc_timeint_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
+  curve_boot_dc_icuint_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
                                       dimnames = list(NULL, NULL, c("E", "N")))
   
   curve_boot_dc_timereg_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
@@ -1135,9 +1135,9 @@ bootstrap_all <- function(boot_in_df) {
   curve_boot_icu_surv_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
                                  dimnames = list(NULL, NULL, c("E", "N")))
   
-  curve_boot_icu_timeint_original <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
+  curve_boot_icu_icuint_original <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
                                         dimnames = list(NULL, NULL, c("E", "N")))
-  curve_boot_icu_timeint_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
+  curve_boot_icu_icuint_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
                                        dimnames = list(NULL, NULL, c("E", "N")))
   
   curve_boot_icu_timereg_original <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
@@ -1190,9 +1190,9 @@ bootstrap_all <- function(boot_in_df) {
       curve_b <- get_marginal_curve(fit_dead_fg_surv, sample_df, time_grid_dc)
       curve_boot_dc_surv_original[sample_i,,"E"] <- curve_b$pred_E
       curve_boot_dc_surv_original[sample_i,,"N"] <- curve_b$pred_N
-      curve_b <- get_marginal_curve(fit_dead_fg_timeint, sample_df, time_grid_dc)
-      curve_boot_dc_timeint_original[sample_i,,"E"] <- curve_b$pred_E
-      curve_boot_dc_timeint_original[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_dead_fg_icuint, sample_df, time_grid_dc)
+      curve_boot_dc_icuint_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_dc_icuint_original[sample_i,,"N"] <- curve_b$pred_N
       curve_b <- get_marginal_curve(fit_dead_fg_timereg, sample_df, time_grid_dc, use_timereg=TRUE)
       curve_boot_dc_timereg_original[sample_i,,"E"] <- curve_b$pred_E
       curve_boot_dc_timereg_original[sample_i,,"N"] <- curve_b$pred_N
@@ -1200,9 +1200,9 @@ bootstrap_all <- function(boot_in_df) {
       curve_b <- get_marginal_curve(fit_icu_fg_surv, sample_df, time_grid_icu)
       curve_boot_icu_surv_original[sample_i,,"E"] <- curve_b$pred_E
       curve_boot_icu_surv_original[sample_i,,"N"] <- curve_b$pred_N
-      curve_b <- get_marginal_curve(fit_icu_fg_timeint, sample_df, time_grid_icu)
-      curve_boot_icu_timeint_original[sample_i,,"E"] <- curve_b$pred_E
-      curve_boot_icu_timeint_original[sample_i,,"N"] <- curve_b$pred_N
+      curve_b <- get_marginal_curve(fit_icu_fg_icuint, sample_df, time_grid_icu)
+      curve_boot_icu_icuint_original[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_icu_icuint_original[sample_i,,"N"] <- curve_b$pred_N
       curve_b <- get_marginal_curve(fit_icu_fg_timereg, sample_df, time_grid_icu, use_timereg=TRUE)
       curve_boot_icu_timereg_original[sample_i,,"E"] <- curve_b$pred_E
       curve_boot_icu_timereg_original[sample_i,,"N"] <- curve_b$pred_N
@@ -1217,10 +1217,10 @@ bootstrap_all <- function(boot_in_df) {
                                     time_grid_dc, trimmed_weights = TRUE)
       curve_boot_dc_surv_trimmed[sample_i,,"E"] <- curve_b$pred_E
       curve_boot_dc_surv_trimmed[sample_i,,"N"] <- curve_b$pred_N
-      curve_b <- get_marginal_curve(fit_dead_fg_timeint, sample_df,
+      curve_b <- get_marginal_curve(fit_dead_fg_icuint, sample_df,
                                     time_grid_dc, trimmed_weights = TRUE)
-      curve_boot_dc_timeint_trimmed[sample_i,,"E"] <- curve_b$pred_E
-      curve_boot_dc_timeint_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      curve_boot_dc_icuint_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_dc_icuint_trimmed[sample_i,,"N"] <- curve_b$pred_N
       curve_b <- get_marginal_curve(fit_dead_fg_timereg, sample_df,
                                     time_grid_dc, trimmed_weights = TRUE, use_timereg=TRUE)
       curve_boot_dc_timereg_trimmed[sample_i,,"E"] <- curve_b$pred_E
@@ -1230,10 +1230,10 @@ bootstrap_all <- function(boot_in_df) {
                                     time_grid_icu, trimmed_weights = TRUE)
       curve_boot_icu_surv_trimmed[sample_i,,"E"] <- curve_b$pred_E
       curve_boot_icu_surv_trimmed[sample_i,,"N"] <- curve_b$pred_N
-      curve_b <- get_marginal_curve(fit_icu_fg_timeint, sample_df,
+      curve_b <- get_marginal_curve(fit_icu_fg_icuint, sample_df,
                                     time_grid_icu, trimmed_weights = TRUE)
-      curve_boot_icu_timeint_trimmed[sample_i,,"E"] <- curve_b$pred_E
-      curve_boot_icu_timeint_trimmed[sample_i,,"N"] <- curve_b$pred_N
+      curve_boot_icu_icuint_trimmed[sample_i,,"E"] <- curve_b$pred_E
+      curve_boot_icu_icuint_trimmed[sample_i,,"N"] <- curve_b$pred_N
       curve_b <- get_marginal_curve(fit_icu_fg_timereg, sample_df,
                                     time_grid_icu, trimmed_weights = TRUE, use_timereg=TRUE)
       curve_boot_icu_timereg_trimmed[sample_i,,"E"] <- curve_b$pred_E
@@ -1290,14 +1290,14 @@ bootstrap_all <- function(boot_in_df) {
   return(list(outcome_df = out_boot_df,
               curve_dc_surv_original = curve_boot_dc_surv_original,
               curve_dc_surv_trimmed = curve_boot_dc_surv_trimmed,
-              curve_dc_timeint_original = curve_boot_dc_timeint_original,
-              curve_dc_timeint_trimmed = curve_boot_dc_timeint_trimmed,
+              curve_dc_icuint_original = curve_boot_dc_icuint_original,
+              curve_dc_icuint_trimmed = curve_boot_dc_icuint_trimmed,
               curve_dc_timereg_original = curve_boot_dc_timereg_original,
               curve_dc_timereg_trimmed = curve_boot_dc_timereg_trimmed,
               curve_icu_surv_original = curve_boot_icu_surv_original,
               curve_icu_surv_trimmed = curve_boot_icu_surv_trimmed,
-              curve_icu_timeint_original = curve_boot_icu_timeint_original,
-              curve_icu_timeint_trimmed = curve_boot_icu_timeint_trimmed,
+              curve_icu_icuint_original = curve_boot_icu_icuint_original,
+              curve_icu_icuint_trimmed = curve_boot_icu_icuint_trimmed,
               curve_icu_timereg_original = curve_boot_icu_timereg_original,
               curve_icu_timereg_trimmed = curve_boot_icu_timereg_trimmed,
               curve_aj_dc_original = curve_boot_aj_dc_original,
@@ -1487,11 +1487,11 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                      model_type = "MV",
                                      ext="xlsx"))
   curve_prime_dc_surv_original <- get_marginal_curve(fit_dead_fg_surv, prime_df, time_grid_dc)
-  curve_prime_dc_timeint_original <- get_marginal_curve(fit_dead_fg_timeint, prime_df, time_grid_dc)
+  curve_prime_dc_icuint_original <- get_marginal_curve(fit_dead_fg_icuint, prime_df, time_grid_dc)
   curve_prime_dc_timereg_original <- get_marginal_curve(fit_dead_fg_timereg, prime_df,
                                                         time_grid_dc, use_timereg=TRUE)
   curve_prime_icu_surv_original <- get_marginal_curve(fit_icu_fg_surv, prime_df, time_grid_icu)
-  curve_prime_icu_timeint_original <- get_marginal_curve(fit_icu_fg_timeint, prime_df, time_grid_icu)
+  curve_prime_icu_icuint_original <- get_marginal_curve(fit_icu_fg_icuint, prime_df, time_grid_icu)
   curve_prime_icu_timereg_original <- get_marginal_curve(fit_icu_fg_timereg, prime_df,
                                                          time_grid_icu, use_timereg=TRUE)
   
@@ -1514,13 +1514,13 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                      ext="xlsx"))
   curve_prime_dc_surv_trimmed <- get_marginal_curve(fit_dead_fg_surv, prime_df,
                                                time_grid_dc, trimmed_weights = TRUE)
-  curve_prime_dc_timeint_trimmed <- get_marginal_curve(fit_dead_fg_timeint, prime_df,
+  curve_prime_dc_icuint_trimmed <- get_marginal_curve(fit_dead_fg_icuint, prime_df,
                                                     time_grid_dc, trimmed_weights = TRUE)
   curve_prime_dc_timereg_trimmed <- get_marginal_curve(fit_dead_fg_timereg, prime_df,
                                                        time_grid_dc, trimmed_weights = TRUE, use_timereg=TRUE)
   curve_prime_icu_surv_trimmed <- get_marginal_curve(fit_icu_fg_surv, prime_df,
                                                 time_grid_icu, trimmed_weights = TRUE)
-  curve_prime_icu_timeint_trimmed <- get_marginal_curve(fit_icu_fg_timeint, prime_df,
+  curve_prime_icu_icuint_trimmed <- get_marginal_curve(fit_icu_fg_icuint, prime_df,
                                                      time_grid_icu, trimmed_weights = TRUE)
   curve_prime_icu_timereg_trimmed <- get_marginal_curve(fit_icu_fg_timereg, prime_df,
                                                         time_grid_icu, trimmed_weights = TRUE, use_timereg=TRUE)
@@ -1543,11 +1543,11 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                                  model_type = "MV",
                                                  ext="png"))
   
-  plot_marginal_curves(curve_prime_dc_timeint_original,
-                       boots_results$curve_dc_timeint_original,
+  plot_marginal_curves(curve_prime_dc_icuint_original,
+                       boots_results$curve_dc_icuint_original,
                        time_grid_dc,
-                       title_in = "Predicted Hospital Mortality CIF (original weights, time interaction)",
-                       file_name = make_filename("mortality_curve_timeint",label_in,
+                       title_in = "Predicted Hospital Mortality CIF (original weights, ICU interaction)",
+                       file_name = make_filename("mortality_curve_icuint",label_in,
                                                  trim_status="original",
                                                  model_type = "MV",
                                                  ext="png"))
@@ -1570,11 +1570,11 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                                  model_type = "MV",
                                                  ext="png"))
   
-  plot_marginal_curves(curve_prime_dc_timeint_trimmed,
-                       boots_results$curve_dc_timeint_trimmed,
+  plot_marginal_curves(curve_prime_dc_icuint_trimmed,
+                       boots_results$curve_dc_icuint_trimmed,
                        time_grid_dc,
-                       title_in = "Predicted Hospital Mortality CIF (trimmed weights, time interaction)",
-                       file_name = make_filename("mortality_curve_timeint",label_in,
+                       title_in = "Predicted Hospital Mortality CIF (trimmed weights, ICU interaction)",
+                       file_name = make_filename("mortality_curve_icuint",label_in,
                                                  trim_status="trimmed",
                                                  model_type = "MV",
                                                  ext="png"))
@@ -1597,11 +1597,11 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                                  model_type = "MV",
                                                  ext="png"))
   
-  plot_marginal_curves(curve_prime_icu_timeint_original,
-                       boots_results$curve_icu_timeint_original,
+  plot_marginal_curves(curve_prime_icu_icuint_original,
+                       boots_results$curve_icu_icuint_original,
                        time_grid_icu,
-                       title_in = "Predicted ICU LOS CIF (original weights, time interaction)",
-                       file_name = make_filename("icu_curve_timeint",label_in,
+                       title_in = "Predicted ICU LOS CIF (original weights, ICU interaction)",
+                       file_name = make_filename("icu_curve_icuint",label_in,
                                                  trim_status="original",
                                                  model_type = "MV",
                                                  ext="png"))
@@ -1624,11 +1624,11 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                                  model_type = "MV",
                                                  ext="png"))
   
-  plot_marginal_curves(curve_prime_icu_timeint_trimmed,
-                       boots_results$curve_icu_timeint_trimmed,
+  plot_marginal_curves(curve_prime_icu_icuint_trimmed,
+                       boots_results$curve_icu_icuint_trimmed,
                        time_grid_icu,
-                       title_in = "Predicted ICU LOS CIF (trimmed weights, time interaction)",
-                       file_name = make_filename("icu_curve_timeint",label_in,
+                       title_in = "Predicted ICU LOS CIF (trimmed weights, ICU interaction)",
+                       file_name = make_filename("icu_curve_icuint",label_in,
                                                  trim_status="trimmed",
                                                  model_type = "MV",
                                                  ext="png"))

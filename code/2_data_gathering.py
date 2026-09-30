@@ -552,7 +552,7 @@ agg_plan = {
     'max':['rocuronium','nitroprusside','norepinephrine','tracheostomy','respiratory_rate','heart_rate','sbp','lactate'],
     'min':['spo2','fio2_set','heart_rate','peep_set'],
     'last':['norepinephrine','device_category','rocuronium','nitroprusside'],
-    'mean':['map']
+    'mean':['map','norepinephrine']
 }
 
 _temp_hourly_df = co.convert_wide_to_hourly(agg_plan,
@@ -633,7 +633,14 @@ for col in inter:
     log(f'Filling hourly for {col} _min and _last. Empty cells {sum(hourly.df[f'{col}_min'].isna()) + sum(hourly.df[f'{col}_last'].isna())}')
     hourly.hourly_fill(f'{col}_last','ffill') #Forward fill first, note _last does not get bfilled.
     hourly.df[f'{col}_min'] = np.where(hourly.df[f'{col}_min'].isna(), hourly.df[f'{col}_last'],hourly.df[f'{col}_min'])
-    hourly.hourly_fill(f'{col}_min','bffill') #To back fill anything left.
+    log(f'Left {col}_last empty cells: {sum(hourly.df[f'{col}_last'].isna())}')
+
+#Forward Fill from last for mean rows
+inter = list(set(agg_plan['mean']) & set(agg_plan['last']))
+for col in inter:
+    log(f'Filling hourly for {col} _mean and _last. Empty cells {sum(hourly.df[f'{col}_mean'].isna()) + sum(hourly.df[f'{col}_last'].isna())}')
+    hourly.hourly_fill(f'{col}_last','ffill') #Forward fill first, note _last does not get bfilled.
+    hourly.df[f'{col}_mean'] = np.where(hourly.df[f'{col}_mean'].isna(), hourly.df[f'{col}_last'], hourly.df[f'{col}_mean'])
     log(f'Left {col}_last empty cells: {sum(hourly.df[f'{col}_last'].isna())}')
 
 #Create vent maker and fill (1 if imv mentioned, 0 if anything, fill in otherwise.
@@ -642,9 +649,10 @@ hourly.df['hourly_on_vent'] = hourly.df['device_category_last'] == 'imv'
 hourly.df['hourly_on_vent'] = hourly.df['hourly_on_vent'].astype("Int64")
 hourly.hourly_fill('hourly_on_vent','ffill')
 
-#Med flags specifically should get back filled with zeros.
+#Med flags specifically should get back filled with zeros. Assuming lack of documentation about a med implies it was not infusing.
 hourly.hourly_fill(f'norepinephrine_last', 0)
 hourly.hourly_fill(f'norepinephrine_max', 0)
+hourly.hourly_fill(f'norepinephrine_mean', 0)
 hourly.hourly_fill(f'rocuronium_last', 0)
 hourly.hourly_fill(f'rocuronium_max', 0)
 
@@ -664,6 +672,7 @@ hourly.hourly_fill('peep_set_min','bffill')
 _col_rename = {
     'norepinephrine_last':'ne_calc_last',
     'norepinephrine_max':'ne_calc_max',
+    'norepinephrine_mean':'ne_calc_mean',
     'nitroprusside_max':'red_med_flag',
     'rocuronium_max':'paralytics_flag'
 }
@@ -912,11 +921,8 @@ del cam_df
 
 
 # ## Elixhauser
-# Using package comorbidipy with Quan et al mappings and Van Walraven weights
 # 
-# Outputs both unadjusted and age adjusted.
-# 
-# Note that this uses either ICD 9 or ICD 10 codes for any given encounter_block. There was a hard switch at some point so there should actually NO encounters with both ICD codes mixed.
+# Prepare a diagnostic code table for the comorbidity index to be calculated in R.
 
 # In[ ]:
 

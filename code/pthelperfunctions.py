@@ -17,20 +17,19 @@ with open(os.path.join(work_dir,'config','config.json'), 'r') as file:
 config['output_folder'] = output_folder
 
 #My time_zone
-my_tz = config['time_zone']
+my_tz = pytz.timezone(config['time_zone'])
 
 #Time Zone things
 def ensure_datetime(s: pd.Series) -> pd.Series:
-    """Parse to datetime; convert UTC into my_tz"""
-    s = pd.to_datetime(s, errors='coerce')
-    try:
-        # Convert to EST if timezone-aware
-        if s.dt.tz is not None:
-            return s.dt.tz_convert(my_tz)
-        else:
-            return s.dt.tz_localize(my_tz)
-    except (TypeError, AttributeError):
-        return s
+    """Parse to datetime and put everything in MY_TZ (same tz object for every column)."""
+    s = pd.to_datetime(s, errors="coerce")
+    if not pd.api.types.is_datetime64_any_dtype(s):
+        return s  # couldn't parse; leave as-is
+    if s.dt.tz is None:
+        # NOTE: this assumes naive values are already local time.
+        s = s.dt.tz_localize(my_tz)
+    return s.dt.tz_convert(my_tz)  # always re-convert so the tz object is the same
+
 
 def convert_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Applies ensure_datetime_est to all datetime columns."""

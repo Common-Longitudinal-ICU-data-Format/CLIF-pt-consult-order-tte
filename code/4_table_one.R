@@ -173,6 +173,7 @@ my_cols         <- column_order$name
 rownames(column_order) <- column_order$name   # lookup by column name
 
 block_df_final <- block_df_scored[, my_cols]
+my_cols <- my_cols[my_cols != "patient_id"] #Remove patient id since it will not be analyzed below.
 
 final_path <- file.path(output_folder, "intermediate", "block_df_final.parquet")
 write_parquet(block_df_final, final_path)
@@ -187,7 +188,7 @@ n_not   <- n_total - n_early
 
 ## ---- Build table1.csv ------------------------------------------------------------
 table1_path <- file.path(output_folder, "final", "table1.csv")
-if (file.exists(table1_path)) file.remove(table1_path)
+if (file.exists(table1_path)) { file.remove(table1_path) }
 
 con <- file(table1_path, open = "w")
 cat(",,Overall,Early PT, No Early PT, SMD, Missing", file = con)
@@ -196,14 +197,14 @@ for (col in my_cols) {
 
   lab <- column_order[col, "description"]
   col_vals <- block_df_final[[col]]
-  SMD_rslt <- smd(col_vals, block_df_final$early_PT, na.rm=TRUE)
 
   if (col == "encounter_block") {
 
     cat(sprintf("\nN,,%s,%s,%s,", n_total, n_early, n_not), file = con)
 
-  } else if (is.character(col_vals) || is.factor(col_vals)) {
-
+  } else if ((is.character(col_vals) || is.factor(col_vals))) {
+    
+    SMD_rslt <- smd(col_vals, block_df_final$early_PT, na.rm=TRUE)
     cat(sprintf("\n%s", lab), file = con)
     col_chr <- as.character(col_vals)
     cats <- unique(col_chr[!is.na(col_chr)])
@@ -219,11 +220,12 @@ for (col in my_cols) {
     cat(sprintf(", %.3f", SMD_rslt$estimate[1]), file = con)
 
   } else if (is.logical(col_vals)) {
-
+    
     if (sum(col_vals, na.rm = TRUE) > 0) {
       sub_df <- block_df_final[!is.na(col_vals), ]
       flag <- ifelse(sub_df[[col]], "TRUE", "FALSE")
       tab  <- table(flag, sub_df$early_PT)
+      SMD_rslt <- smd(col_vals, block_df_final$early_PT, na.rm=TRUE)
       cc_all   <- 100 * sum(tab["TRUE", ]) / sum(!is.na(sub_df[[col]]))
       cc_early <- 100 * tab["TRUE", "early_PT"]    / sum(tab[, "early_PT"])
       cc_not   <- 100 * tab["TRUE", "no_early_PT"] / sum(tab[, "no_early_PT"])
@@ -233,7 +235,8 @@ for (col in my_cols) {
     }
 
   } else if (is.numeric(col_vals)) {
-
+    
+    SMD_rslt <- smd(col_vals, block_df_final$early_PT, na.rm=TRUE)
     cc_all   <- col_vals[!is.na(col_vals)]
     cc_early <- col_vals[block_df_final[[early_col]]  & !is.na(block_df_final[[early_col]])]
     cc_early <- cc_early[!is.na(cc_early)]
@@ -331,4 +334,3 @@ write_parquet(stats_df, stats_out_path)
 ## END
 ## ------------------------------------------------------------------
 sink()
-#renv::snapshot()

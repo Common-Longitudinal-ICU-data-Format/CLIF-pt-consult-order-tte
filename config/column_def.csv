@@ -1,5 +1,6 @@
 name,description,covariate,outcome,other
 encounter_block,Identifier,0,0,identifier
+patient_id,0,0,patient identifier
 age,Age (years),1,0,
 sex_category,Sex,1,0,
 race_category,Race,1,0,
@@ -17,6 +18,7 @@ peep_set_0_24h_mean,Mean PEEP (0-24 hours) (cm H2O),0,0,
 heart_rate_0_24h_mean,Mean Heart Rate (0-24 hours) (beats/min),0,0,
 map_0_24h_mean,Mean MAP (0-24 hours) (mmHg),0,0,
 pressor_0_24h_flag,Vasopressor use (0-24 hours),0,0,
+ne_calc_0_24h_mean,Norepinephrine Equivalent Mean Dose (0-24 hours),0,0,
 sofa_0_24h,SOFA Score (0-24 hours),0,0,
 RASS_0_24h_min,Minimum RASS (0-24 hours),0,0,
 coma_0_24h_sum,Hours of oversedation (0-24 hours),0,0,
