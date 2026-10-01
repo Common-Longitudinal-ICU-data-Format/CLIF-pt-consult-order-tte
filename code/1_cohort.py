@@ -59,10 +59,10 @@ with open(os.path.join(work_dir,'config','config.json'), 'r') as file:
 #MIMIC needs its shifted dates un-shifted before any calendar filter can mean anything.
 use_mimic = 'mimic' in config['site_name'].lower()
 
-#Admission year window, applied at every site so the pooled analysis covers one common era.
-#Defaults are used when a site's config.json predates these keys. See config/README.md.
-year_min = int(config.get('year_min', 2018))
-year_max = int(config.get('year_max', 2024))
+#Admission year window. Fixed here rather than in config.json on purpose: every site must use the
+#same window so calendar era is not confounded with site in the pooled analysis.
+year_min = 2018
+year_max = 2024
 
 
 # In[ ]:
@@ -568,7 +568,7 @@ for _enc_id, _group in _extra_rows.groupby('encounter_block'):
     _gap_times = pd.date_range(
         start=_max_time + timedelta(hours=1),
         end=_first_extra_time - timedelta(hours=1),
-        freq='H'
+        freq='h'       #pandas 3 removed the uppercase 'H' alias
     )
 
     for _dt in _gap_times:

@@ -1,13 +1,17 @@
 [project]
 name = "pt-consults"
 version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.12"
+description = "CLIF target-trial emulation of early PT consult (within 48h of IMV start) on ventilator-free days, ICU length of stay, and mortality"
+#Pinned to the exact versions the pipeline was buddy-tested on (MIMIC, 2026-10-01). Every site
+#runs the same environment via `uv sync`; bump deliberately with `uv lock --upgrade-package <pkg>`
+#and re-test, rather than letting a fresh resolve drift. The interpreter is held to 3.12 because
+#3.13+ has not been exercised at any site.
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "clifpy>=0.5.0",
-    "matplotlib>=3.11.0",
-    "numpy>=2.5.1",
-    "pandas>=3.0.3",
-    "pyarrow>=25.0.0",
-    "pytz>=2026.2",
+    "clifpy==0.5.0",
+    "matplotlib==3.11.0",
+    "numpy==2.5.1",
+    "pandas==3.0.3",
+    "pyarrow==25.0.0",
+    "pytz==2026.2",
 ]
