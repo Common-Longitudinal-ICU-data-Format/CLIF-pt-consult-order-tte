@@ -12,7 +12,7 @@
 
 # ## Setup
 
-# In[1]:
+# In[ ]:
 
 
 ### Import
@@ -65,7 +65,7 @@ year_min = int(config.get('year_min', 2018))
 year_max = int(config.get('year_max', 2024))
 
 
-# In[2]:
+# In[ ]:
 
 
 #output_folders
@@ -121,7 +121,7 @@ log(f"=== CLIF Pipeline 01: Cohort Identification ===")
 log(f"Site: {config['site_name']}")
 
 
-# In[3]:
+# In[ ]:
 
 
 #Load Clif Tables
@@ -134,7 +134,7 @@ log(f"Total Number of unique encounters in the hospitalization table: {co.hospit
 # ## Cohort Identification 
 # ### (A) Age Filter
 
-# In[4]:
+# In[ ]:
 
 
 log("\n=== STEP A: Filter by age ===\n")
@@ -153,7 +153,7 @@ log("Missing values in discharge_dttm:", co.hospitalization.df['discharge_dttm']
 
 # ### (B) Stitch Hospitalizations
 
-# In[5]:
+# In[ ]:
 
 
 log("\n=== STEP B: Stitch encounters ===\n")
@@ -173,7 +173,7 @@ log(f"Number of linked hospitalization ids: {strobe_ab['B_before_stitching'] - s
 
 # ### (B2) Year Filter
 
-# In[6]:
+# In[ ]:
 
 
 log("\n=== STEP B2: Admission year filter ===\n")
@@ -206,7 +206,7 @@ del _eb_inyear
 # - Identify potential extubations based on `lpm_set` not being empty.
 # - Impute missing FiO2 values
 
-# In[7]:
+# In[ ]:
 
 
 log("\n=== STEP C: Load & process respiratory support => Apply Waterfall & Identify IMV usage ===\n")
@@ -382,10 +382,6 @@ def impute_fio2_from_nasal_cannula_flow(df):
 rs_waterfall = impute_fio2_from_nasal_cannula_flow(rs_waterfall)
 #On vent flag
 rs_waterfall['on_vent'] = np.where(rs_waterfall['device_category'].str.contains("imv", case=False, na=False), 1, 0)
-#Save it for later use
-path = os.path.join(output_folder,'intermediate','respiratory_support_waterfall.parquet')
-rs_waterfall.to_parquet(path)
-del path
 
 log("Missing values in recorded_dttm:", rs_waterfall['recorded_dttm'].isna().sum())
 
@@ -447,50 +443,53 @@ log("\n=== STEP E: Intubation episodes identification ===\n")
 _resp_df = rs_waterfall.loc[
     rs_waterfall['device_category'].notna()
     & (rs_waterfall['device_category'].astype(str).str.strip() != ''),
-    ['encounter_block', 'recorded_dttm', 'device_category','tracheostomy']
+    ['encounter_block', 'recorded_dttm', 'device_category','tracheostomy','on_vent']
 ].copy()
 
 _resp_df = _resp_df.sort_values(['encounter_block', 'recorded_dttm'], kind='stable').reset_index(drop=True)
 
 # --- flag IMV vs. not, and label contiguous runs of the same state ---
-_resp_df['is_imv'] = _resp_df['device_category'].astype(str).str.strip().str.lower().eq('imv')
-prev_state = _resp_df.groupby('encounter_block')['is_imv'].shift()
-_resp_df['run_id'] = (_resp_df['is_imv'] != prev_state).astype(bool).cumsum()   # first row of each encounter starts a new run
+prev_state = _resp_df.groupby('encounter_block')['on_vent'].shift()
+_resp_df['run_id'] = (_resp_df['on_vent'] != prev_state).astype(bool).cumsum()   # first row of each encounter starts a new run
 
 # --- collapse each run to its first/last timestamp ---
 runs = (
     _resp_df.groupby('run_id', sort=True)
       .agg(encounter_block=('encounter_block', 'first'),
-           is_imv=('is_imv', 'first'),
+           is_imv=('on_vent', 'first'),
            run_start=('recorded_dttm', 'first'),
            run_last=('recorded_dttm', 'last'),
            tracheostomy=('tracheostomy', 'first'))
       .reset_index(drop=True)
 )
+log(f"Total respiratory support RUNS found: {runs.shape[0]}")
+log(f"Unique encounter blocks in RUNS: {runs['encounter_block'].nunique()}")
 
 # start of the next run in the same encounter = extubation time
 runs['next_run_start'] = runs.groupby('encounter_block')['run_start'].shift(-1)
 
-imv_episodes = runs.loc[runs['is_imv']].copy()
+imv_episodes = runs[ runs['is_imv'] == 1 ].copy()
 imv_episodes['vent_start_dttm'] = imv_episodes['run_start']
 imv_episodes['vent_end_dttm'] = imv_episodes['next_run_start'].fillna(imv_episodes['run_last'])
 
 imv_episodes = (
     imv_episodes[['encounter_block', 'vent_start_dttm', 'vent_end_dttm','tracheostomy']]
     .sort_values(['encounter_block', 'vent_start_dttm'])
+    .drop_duplicates()
     .reset_index(drop=True)
 )
 
 log(f"Total intubation episodes found: {imv_episodes.shape[0]}")
+log(f"Unique encounter blocks with >0 intubations episodes: {imv_episodes['encounter_block'].nunique()}")
     
-del _resp_df, runs
+#del _resp_df, runs
 
 
 # In[ ]:
 
 
 #Merge with the overall block vent initiation
-imv_episodes = pd.merge(block_df['encounter_block','block_vent_start_dttm'],
+imv_episodes = pd.merge(block_df[['encounter_block','block_vent_start_dttm']],
                         imv_episodes,
                         on='encounter_block',
                         how='left')
@@ -498,7 +497,7 @@ imv_episodes = pd.merge(block_df['encounter_block','block_vent_start_dttm'],
 #Max out vent_end_dttm to block_vent_start_dttm + 72 hours
 imv_episodes['72h'] = imv_episodes['block_vent_start_dttm'] + pd.Timedelta(hours=72)
 imv_episodes = imv_episodes[ imv_episodes['vent_start_dttm'] <= imv_episodes['72h'] ]
-imv_episodes['vent_end_dttm'] = imv_episodes[['72h','vent_end_dttm']].max(axis=1)
+imv_episodes['vent_end_dttm'] = imv_episodes[['72h','vent_end_dttm']].min(axis=1)
 
 #Calculate the number of hours (by the filter above this would only include hours in the first 72 hours)
 imv_episodes['vent_hours'] = (imv_episodes['vent_end_dttm'] - imv_episodes['vent_start_dttm']).dt.total_seconds()/3600
@@ -528,11 +527,11 @@ log(f"Unique encounter blocks with IMV >=4 hours: {strobe_excl['F_blocks_with_ve
 log(f"Excluded {len(_blocks_under_4)} encounter blocks with <4 vent hours in first 72 hours of intubation.\n")
 
 # Exclude blocks with trach at the time of intubation
-_blocks_with_trach_at_intubation = imv_hours_df[ imv_hours_df['trach_at_start'] ]
-imv_hours_df = imv_hours_df[ ~imv_hours_df['trach_at_start'] ]
-strobe_excl['F_final_blocks_with_trach_at_intubation'] = len(_blocks_with_trach_at_intubation)
+_blocks_with_trach_at_intubation = imv_hours_df['trach_at_start'].astype(int)
+imv_hours_df = imv_hours_df[ _blocks_with_trach_at_intubation == 0 ]
+strobe_excl['F_final_blocks_with_trach_at_intubation'] = sum(_blocks_with_trach_at_intubation)
 strobe_excl['F_final_blocks_without_trach_at_intubation'] = imv_hours_df['encounter_block'].nunique()
-log(f"Blocks with trach at intubation: {len(_blocks_with_trach_at_intubation)}")
+log(f"Blocks with trach at intubation: {strobe_excl['F_final_blocks_with_trach_at_intubation']}")
 log(f"Cohort size in hourly blocks: {strobe_excl['F_final_blocks_without_trach_at_intubation']}")
 
 del _blocks_under_4, _blocks_with_trach_at_intubation
@@ -551,6 +550,7 @@ block_df = block_df[block_df['encounter_block'].isin(_eb_list)]
 co.hospitalization.df = co.hospitalization.df[co.hospitalization.df['encounter_block'].isin(_eb_list)]
 co.adt.df = co.adt.df[co.adt.df['encounter_block'].isin(_eb_list)]
 co.patient.df = co.patient.df[co.patient.df['patient_id'].isin(co.hospitalization.df['patient_id'])]
+rs_waterfall = rs_waterfall[rs_waterfall['encounter_block'].isin(_eb_list)]
 
 #Merge with encounter block data
 enc_map = pd.merge(co.encounter_mapping,
@@ -562,6 +562,11 @@ enc_map = enc_map[enc_map['encounter_block'].isin(_eb_list)]
 #Save progress
 path = os.path.join(output_folder,'intermediate','block_df_1_creation.parquet')
 block_df.to_parquet(path)
+del path
+
+#Save it for later use
+path = os.path.join(output_folder,'intermediate','respiratory_support_waterfall.parquet')
+rs_waterfall.to_parquet(path)
 del path
 
 log(f"01_cohort: FINAL COHORT: Block Length: {len(block_df)}, Encounter Blocks {block_df['encounter_block'].nunique()}")
@@ -893,7 +898,6 @@ strobe_counts = {}
 strobe_counts.update(strobe_ab)
 strobe_counts.update(strobe_c)
 strobe_counts.update(strobe_d)
-strobe_counts.update(strobe_e)
 strobe_counts.update(strobe_excl)
 
 pd.DataFrame(list(strobe_counts.items()), columns=['Metric', 'Value']).to_csv(
@@ -907,20 +911,20 @@ _ax.axis('off')
 
 
 _boxes = [
-    {"text": f"All adult encounters after date filter\n(n = {strobe_counts['A_after_age_filter']})", "xy": (0.5, 0.9)},
-    {"text": f"Linked Encounter Blocks\n(n = {strobe_counts['B_after_stitching']})", "xy": (0.5, 0.8)},
-    {"text": f"Encounter Blocks in year range ({year_min} - {year_max})\n(n = {strobe_counts['B2_encounter_blocks_in_year']})", "xy": (0.5, 0.7)},
-    {"text": f"Encounter blocks receiving IMV\n(n = {strobe_counts['C_imv_encounter_blocks']})", "xy": (0.5, 0.6)},
-    {"text": f"Encounter blocks receiving IMV >= 4 hrs\n(n = {strobe_counts['F_blocks_with_vent_4_or_more']})", "xy": (0.5, 0.5)},
-    {"text": f"Encounter blocks not on trach\n(n = {strobe_counts['F_final_blocks_without_trach_at_intubation']})", "xy": (0.5, 0.4)},
-    {"text": f"Encounter blocks with valid data\n(n = {strobe_counts['F_final_blocks_with_good_data']})", "xy": (0.5, 0.3)},
-    {"text": f"Encounter blocks cloned\n(n = {strobe_counts['F_final_blocks_with_good_data'] - strobe_counts['X_blocks_with_pt_24h_prior']})", "xy": (0.5, 0.2)},
+    {"text": f"All adult encounters after date filter\n(n = {strobe_counts['A_after_age_filter']})", "xy": (0.35, 0.9)},
+    {"text": f"Linked Encounter Blocks\n(n = {strobe_counts['B_after_stitching']})", "xy": (0.35, 0.8)},
+    {"text": f"Encounter Blocks in year range ({year_min} - {year_max})\n(n = {strobe_counts['B2_encounter_blocks_in_year']})", "xy": (0.35, 0.7)},
+    {"text": f"Encounter blocks receiving IMV\n(n = {strobe_counts['C_imv_encounter_blocks']})", "xy": (0.35, 0.6)},
+    {"text": f"Encounter blocks receiving IMV >= 4 hrs\n(n = {strobe_counts['F_blocks_with_vent_4_or_more']})", "xy": (0.35, 0.5)},
+    {"text": f"Encounter blocks not on trach\n(n = {strobe_counts['F_final_blocks_without_trach_at_intubation']})", "xy": (0.35, 0.4)},
+    {"text": f"Encounter blocks with valid data\n(n = {strobe_counts['F_final_blocks_with_good_data']})", "xy": (0.35, 0.3)},
+    {"text": f"Encounter blocks cloned\n(n = {strobe_counts['F_final_blocks_with_good_data'] - strobe_counts['X_blocks_with_pt_24h_prior']})", "xy": (0.35, 0.2)},
 ]
 
 _exclusions = [
     {"text": f"Linked hospitalizations\n(n = {strobe_counts['B_stitched_hosp_ids']})", "xy": (0.8, 0.85)},
-    {"text": f"Excluded: Out of year range\n(n = {strobe_counts['B2_encounter_blocks_out_of_year']})", "xy":(0.8, 0.75)}
-    {"text": f"Excluded: Encounters on vent for <4 hrs\n(n = {strobe_counts['D_blocks_with_same_vent_start_end'] + strobe_counts['E_blocks_with_vital_end_before_vent_start'] + strobe_counts['F_blocks_with_vent_less_than_4']})", "xy": (0.8, 0.55)},
+    {"text": f"Excluded: Out of year range\n(n = {strobe_counts['B2_encounter_blocks_out_of_year']})", "xy":(0.8, 0.75)},
+    {"text": f"Excluded: Encounters on vent for <4 hrs\n(n = {strobe_counts['D_blocks_with_same_vent_start_end'] + strobe_counts['F_blocks_with_vent_less_than_4']})", "xy": (0.8, 0.55)},
     {"text": f"Excluded: Encounters with Tracheostomy\n(n = {strobe_counts['F_final_blocks_with_trach_at_intubation']})", "xy": (0.8, 0.45)},
     {"text": f"Excluded: Encounters with bad date-time data (n = {strobe_counts['X_blocks_with_bad_time_data']})", "xy": (0.8, 0.35)},
     {"text": f"Excluded: Encounters with PT consult 24 hours\nprior to IMV (n = {strobe_counts['X_blocks_with_pt_24h_prior']})", "xy": (0.8, 0.25)},
