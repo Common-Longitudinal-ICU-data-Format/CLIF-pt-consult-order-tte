@@ -576,8 +576,34 @@ log('Encounters in hourly_df:\n',_temp_hourly_df['encounter_block'].nunique())
 #Missing summary before filling anything in.
 helper.missing_summary(_temp_hourly_df, f_name='hourly_df_2_clifpy_raw')
 
+
+# In[ ]:
+
+
+#Fix date time issues
+#Unfortunately the function above stripped the date of timezone awareness.
+#Simply trying to relocalize lead to daylight saving issues, so we have to infer DST status using the DST differences.
+start_naive = pd.to_datetime(_temp_hourly_df["window_start_dttm"])
+end_naive = pd.to_datetime(_temp_hourly_df["window_end_dttm"])
+
+same_wall_time = (end_naive == start_naive).to_numpy()
+
+_temp_hourly_df["window_start_dttm"] = start_naive.dt.tz_localize(
+    helper.my_tz, ambiguous=same_wall_time, nonexistent="shift_forward"
+)
+_temp_hourly_df["window_end_dttm"] = end_naive.dt.tz_localize(
+    helper.my_tz, ambiguous=~same_wall_time, nonexistent="shift_forward"
+)
+
+# Sanity check
+dur = _temp_hourly_df["window_end_dttm"] - _temp_hourly_df["window_start_dttm"]
+log(f"Windows not exactly 1 hour: {(dur.notna() & (dur != pd.Timedelta(hours=1))).sum()}")
+
+
+# In[ ]:
+
+
 #Load Hourly_Blocks object
-_temp_hourly_df = helper.convert_datetime_columns(_temp_hourly_df) #Currently clifpy implementation strips time zone but retains value.
 _temp_hourly_df = _temp_hourly_df.merge(block_df[['encounter_block','block_vent_start_dttm']], on='encounter_block',how='left')
 _temp_hourly_df['time_from_vent'] = np.ceil((_temp_hourly_df['window_end_dttm'] - _temp_hourly_df['block_vent_start_dttm']).dt.total_seconds()/3600)
 _temp_hourly_df['time_from_vent'] = _temp_hourly_df['time_from_vent'].astype("Int64")
