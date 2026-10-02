@@ -12,7 +12,7 @@
 
 # ## Setup
 
-# In[ ]:
+# In[1]:
 
 
 ### Import
@@ -56,16 +56,16 @@ output_folder = os.path.join(work_dir,'output')
 with open(os.path.join(work_dir,'config','config.json'), 'r') as file:
     config = json.load(file)
 
-#MIMIC needs its shifted dates un-shifted before any calendar filter can mean anything.
+#MIMIC needs years are shifted so cannot be used for filteing.
 use_mimic = 'mimic' in config['site_name'].lower()
 
-#Admission year window. Fixed here rather than in config.json on purpose: every site must use the
-#same window so calendar era is not confounded with site in the pooled analysis.
-year_min = 2018
-year_max = 2024
+#Admission year window, applied at every site so the pooled analysis covers one common era.
+#Defaults are used when a site's config.json predates these keys. See config/README.md.
+year_min = int(config.get('year_min', 2018))
+year_max = int(config.get('year_max', 2024))
 
 
-# In[ ]:
+# In[2]:
 
 
 #output_folders
@@ -121,7 +121,7 @@ log(f"=== CLIF Pipeline 01: Cohort Identification ===")
 log(f"Site: {config['site_name']}")
 
 
-# In[ ]:
+# In[3]:
 
 
 #Load Clif Tables
@@ -133,9 +133,8 @@ log(f"Total Number of unique encounters in the hospitalization table: {co.hospit
 
 # ## Cohort Identification 
 # ### (A) Age Filter
-# ### (B) Stitch Hospitalizations
 
-# In[ ]:
+# In[4]:
 
 
 log("\n=== STEP A: Filter by age ===\n")
@@ -151,41 +150,11 @@ log(f"Number of unique patients after age filter: {strobe_ab['A_unique_patients'
 log("\nMissing values in admission_dttm:", co.hospitalization.df['admission_dttm'].isna().sum())
 log("Missing values in discharge_dttm:", co.hospitalization.df['discharge_dttm'].isna().sum())
 
-log(f"\n=== STEP A2: Filter by admission year ({year_min}-{year_max}) ===\n")
-#Build a hospitalization_id -> admission_year table, then filter by id so the join below cannot
-#disturb co.hospitalization.df's index.
-_hosp_year = co.hospitalization.df[['hospitalization_id','patient_id','admission_dttm']].copy()
-if use_mimic:
-    #MIMIC shifts every patient's dates by a random per-patient offset (CLIF admission years read
-    #~2105-2214), so admission_dttm.year is meaningless on its own. Recover the real year from the
-    #raw anchor columns, mirroring the reconstruction in 2_data_gathering.py.
-    log("MIMIC site: reconstructing admission year from anchor_year before filtering.")
-    _anchor = helper.load_data("mimic","patients", folder='hosp', type='csv.gz')
-    _anchor = _anchor.rename(columns={'subject_id':'patient_id'})[['patient_id','anchor_year','anchor_year_group']]
-    _anchor['patient_id'] = _anchor['patient_id'].astype(str)
-    _anchor['anchor_year_group'] = _anchor['anchor_year_group'].str.slice(0,4).astype("Int64") + 1
-    _hosp_year['patient_id'] = _hosp_year['patient_id'].astype(str)
-    _hosp_year = _hosp_year.merge(_anchor, on='patient_id', how='left')
-    _hosp_year['admission_year'] = (_hosp_year['admission_dttm'].dt.year.astype("Int64")
-                                    - _hosp_year['anchor_year'] + _hosp_year['anchor_year_group'])
-    del _anchor
-else:
-    _hosp_year['admission_year'] = _hosp_year['admission_dttm'].dt.year.astype("Int64")
 
-#A year that could not be resolved (missing anchor row, missing admission_dttm) fails the window
-#and is excluded. Logged separately so it is not mistaken for a genuine out-of-window encounter.
-strobe_ab['A_hosp_year_unresolved'] = int(_hosp_year['admission_year'].isna().sum())
-_keep_ids = _hosp_year.loc[_hosp_year['admission_year'].between(year_min, year_max), 'hospitalization_id']
-co.hospitalization.df = co.hospitalization.df[co.hospitalization.df['hospitalization_id'].isin(_keep_ids)]
+# ### (B) Stitch Hospitalizations
 
-strobe_ab['A_after_year_filter'] = co.hospitalization.df['hospitalization_id'].nunique()
-strobe_ab['A_hosp_outside_year_window'] = strobe_ab['A_after_age_filter'] - strobe_ab['A_after_year_filter']
-strobe_ab['A_unique_patients_in_window'] = co.hospitalization.df['patient_id'].nunique()
-log(f"Admission year could not be resolved for: {strobe_ab['A_hosp_year_unresolved']} hospitalizations")
-log(f"Excluded outside {year_min}-{year_max}: {strobe_ab['A_hosp_outside_year_window']}")
-log(f"Number of unique hospitalizations in window: {strobe_ab['A_after_year_filter']}")
-log(f"Number of unique patients in window: {strobe_ab['A_unique_patients_in_window']}")
-del _hosp_year, _keep_ids
+# In[5]:
+
 
 log("\n=== STEP B: Stitch encounters ===\n")
 _cohort_ids = co.hospitalization.df['hospitalization_id'].unique().tolist()
@@ -202,13 +171,42 @@ log(f"Number of unique encounter blocks after stitching: {strobe_ab['B_after_sti
 log(f"Number of linked hospitalization ids: {strobe_ab['B_before_stitching'] - strobe_ab['B_after_stitching']}")
 
 
+# ### (B2) Year Filter
+
+# In[6]:
+
+
+log("\n=== STEP B2: Admission year filter ===\n")
+
+co.hospitalization.df['admission_year'] = co.hospitalization.df['admission_dttm'].dt.year.astype("Int64")
+log(f"Mininum year before filtering: {co.hospitalization.df['admission_year'].min()}")
+log(f"Maximum year before filtering: {co.hospitalization.df['admission_year'].max()}")
+
+if use_mimic:
+    ##No year filtering for MIMIC, include all.
+    _eb_inyear = co.hospitalization.df['encounter_block'].drop_duplicates()
+else:
+    _eb_inyear = co.hospitalization.df[ co.hospitalization.df['admission_year'].between(year_min, year_max) ]['encounter_block'].drop_duplicates()
+
+co.hospitalization.df = co.hospitalization.df[ co.hospitalization.df['encounter_block'].isin(_eb_inyear) ]
+
+strobe_ab['B2_encounter_blocks_in_year'] = co.hospitalization.df['encounter_block'].nunique()
+strobe_ab['B2_encounter_blocks_out_of_year'] = strobe_ab['B_after_stitching'] - strobe_ab['B2_encounter_blocks_in_year']
+log(f"Encounter blocks in year: {strobe_ab['B2_encounter_blocks_in_year']}")
+log(f"Encounter blocks out of year: {strobe_ab['B2_encounter_blocks_in_year']}")
+log(f"Mininum year after filtering: {co.hospitalization.df['admission_year'].min()}")
+log(f"Maximum year after filtering: {co.hospitalization.df['admission_year'].max()}")
+
+del _eb_inyear
+
+
 # ### (C) Identify Ventilator Usage
 # - Filter first by any hospitalization that has a single IMV reportedd.
 # - Create waterfall / hourly blocks of respiratory support data. See clifpy documentation for details of everything this entails.
 # - Identify potential extubations based on `lpm_set` not being empty.
 # - Impute missing FiO2 values
 
-# In[ ]:
+# In[7]:
 
 
 log("\n=== STEP C: Load & process respiratory support => Apply Waterfall & Identify IMV usage ===\n")
@@ -239,10 +237,6 @@ rs_waterfall = _rs.waterfall(id_col="encounter_block", verbose=True, return_data
 #Since we used EB to create waterfall the hosp_id's were not fowardfilled.
 rs_waterfall['hospitalization_id'] = rs_waterfall.groupby('encounter_block')['hospitalization_id'].ffill()
 log(f"Number of rows in respiratory support waterfall: {rs_waterfall.shape[0]}")
-
-
-# In[ ]:
-
 
 #Fixes an issue of the waterfall function using a different time-zone object although the time zone is still the same.
 rs_waterfall = helper.convert_datetime_columns(rs_waterfall)
@@ -437,186 +431,85 @@ co.hospitalization.df = co.hospitalization.df[co.hospitalization.df['encounter_b
 co.adt.df = co.adt.df[co.adt.df['encounter_block'].isin(_eb_list)]
 co.encounter_mapping = co.encounter_mapping[co.encounter_mapping['encounter_block'].isin(_eb_list)]
 co.patient.df = co.patient.df[co.patient.df['patient_id'].isin(co.hospitalization.df['patient_id'])]
-
+rs_waterfall = rs_waterfall[rs_waterfall['encounter_block'].isin(_eb_list)]
+    
 log(f"01_cohort: ADULT and IMV for >0 hours : Block Length: {len(block_df)}, Encounter Blocks {block_df['encounter_block'].nunique()}")
 
 
-# ### (E) Hourly sequence generation BLOCK level
+# ### (E) Intubation episodes identification
 
 # In[ ]:
 
 
-log("\n=== STEP E: Hourly sequence generation BLOCK level ===\n")
+log("\n=== STEP E: Intubation episodes identification ===\n")
 
-# 1) Load vitals
-#NOTE: clifpy resolves filters/columns per table name (filters.get(table)), so both dicts must be
-#keyed by 'vitals'. Keying by the column name instead silently loads the entire vitals table.
-#Only hospitalization_id and recorded_dttm are used below (first/last vital per block).
-co.initialize(tables=['vitals'],
-    columns={'vitals': ['hospitalization_id', 'recorded_dttm']},
-    filters={'vitals': {'hospitalization_id': co.encounter_mapping['hospitalization_id'].unique().tolist()}}
-)
-#clifpy.utils.apply_outlier_handling(co.vitals) #Remove outliers per CLIF standards
-co.vitals.df = co.vitals.df.merge(co.encounter_mapping, on='hospitalization_id', how='left')
-#co.vitals.df = co.vitals.df.sort_values(['encounter_block', 'recorded_dttm'])
-
-
-# Merge to get encounter_block on each vital
-vitals_stitched = co.vitals.df.merge(block_vent_times, on='encounter_block', how='left')
-# Group by block => find earliest & latest vital for that block
-_vital_bounds_block = vitals_stitched.groupby('encounter_block', dropna=True)['recorded_dttm'].agg(['min', 'max']).reset_index()
-_vital_bounds_block.columns = ['encounter_block', 'block_first_vital_dttm', 'block_last_vital_dttm']
-block_df = block_df.merge(_vital_bounds_block, on='encounter_block', how='left')
-
-# 2) Merge block_vent_times with vital_bounds_block
-final_blocks = block_vent_times.merge(_vital_bounds_block, on='encounter_block', how='inner')
-
-# 3) Check for bad blocks
-_bad_block = final_blocks[final_blocks['block_last_vital_dttm'] < final_blocks['block_vent_start_dttm']]
-final_blocks = final_blocks[final_blocks['block_last_vital_dttm'] >= final_blocks['block_vent_start_dttm']]
-strobe_e = {}
-strobe_e['E_blocks_with_vital_end_before_vent_start'] = _bad_block['encounter_block'].nunique()
-if len(_bad_block) > 0:
-    log("Warning: Some blocks have last vital < vent start (REMOVED):\n", strobe_e['E_blocks_with_vital_end_before_vent_start'])
-else:
-    log("There are no blocks that have last vital < vent start! Good job CLIF-ing")
-#These are not removed since they may still be plausible.
-_bad_block = final_blocks[final_blocks['block_first_vital_dttm'] > final_blocks['block_vent_start_dttm']]
-strobe_e['E_blocks_with_vital_start_after_vent_start'] = _bad_block['encounter_block'].nunique()
-if len(_bad_block) > 0:
-    log("Warning: Some blocks have vent start < vital start(NOT REMOVED):\n", strobe_e['E_blocks_with_vital_start_after_vent_start'])
-else:
-    log("There are no blocks that have vent start < vital start! Good job CLIF-ing")
-
-# 4) Generate the hourly sequence at block level
-#Vectorised expansion: one hourly row per block from block_vent_start_dttm to block_last_vital_dttm.
-#Equivalent to pd.date_range(start, end, freq='h') per block, which yields
-#floor((end - start)/1h) + 1 stamps. final_blocks is already filtered to end >= start above.
-#The arithmetic stays in pandas on purpose: routing tz-aware stamps through numpy drops the timezone.
-_seq_bounds = (
-    final_blocks[['encounter_block', 'block_vent_start_dttm', 'block_last_vital_dttm']]
-    .drop_duplicates(subset='encounter_block')      #matches the old .iloc[0] per group
-    .sort_values('encounter_block')
-    .reset_index(drop=True)
-)
-_n_hours = (
-    ((_seq_bounds['block_last_vital_dttm'] - _seq_bounds['block_vent_start_dttm'])
-     .dt.total_seconds() // 3600).astype('int64') + 1
-)
-_hour_offsets = (
-    np.arange(int(_n_hours.sum()))
-    - np.repeat((_n_hours.cumsum() - _n_hours).to_numpy(), _n_hours.to_numpy())
-)
-_hourly_seq_block = pd.DataFrame({
-    'encounter_block': _seq_bounds['encounter_block'].repeat(_n_hours.to_numpy())
-                       .reset_index(drop=True).astype('int64'),
-    'recorded_dttm': _seq_bounds['block_vent_start_dttm'].repeat(_n_hours.to_numpy())
-                     .reset_index(drop=True) + pd.to_timedelta(_hour_offsets, unit='h')
-})
-del _seq_bounds, _n_hours, _hour_offsets
-
-_hourly_seq_block['recorded_date'] = _hourly_seq_block['recorded_dttm'].dt.date
-_hourly_seq_block['recorded_hour'] = _hourly_seq_block['recorded_dttm'].dt.hour
-_hourly_seq_block = _hourly_seq_block.drop(columns=['recorded_dttm'])
-_hourly_seq_block = _hourly_seq_block.drop_duplicates(subset=['encounter_block', 'recorded_date', 'recorded_hour'])
-
-# 6) Combine with respiratory support data
-rs_waterfall['recorded_date'] = rs_waterfall['recorded_dttm'].dt.date
-rs_waterfall['recorded_hour'] = rs_waterfall['recorded_dttm'].dt.hour
-_hourly_vent_block = rs_waterfall.groupby(['encounter_block', 'recorded_date', 'recorded_hour']).agg(
-    hourly_trach=('tracheostomy', 'max'),
-    hourly_on_vent=('on_vent', 'max'),
-).reset_index()
-
-# Sanity check
-_seq_blocks = set(_hourly_seq_block['encounter_block'].unique())
-_vent_blocks = set(_hourly_vent_block['encounter_block'].unique())
-_blocks_in_seq_not_vent = _seq_blocks - _vent_blocks
-_blocks_in_vent_not_seq = _vent_blocks - _seq_blocks
-log("Blocks in hourly_seq_block but not in hourly_vent_block:", len(_blocks_in_seq_not_vent))
-if len(_blocks_in_seq_not_vent) > 0:
-    log(sorted(list(_blocks_in_seq_not_vent)))
-log("\nBlocks in hourly_vent_block but not in hourly_seq_block:", len(_blocks_in_vent_not_seq))
-
-# Step 1: Reconstruct timestamps
-_hourly_seq_block['recorded_dttm'] = pd.to_datetime(_hourly_seq_block['recorded_date']) + pd.to_timedelta(_hourly_seq_block['recorded_hour'], unit='h')
-_hourly_vent_block['recorded_dttm'] = pd.to_datetime(_hourly_vent_block['recorded_date']) + pd.to_timedelta(_hourly_vent_block['recorded_hour'], unit='h')
-
-# Step 2: Get max scaffold time per encounter
-_max_times = (
-    _hourly_seq_block.groupby('encounter_block')['recorded_dttm']
-    .max().reset_index()
-    .rename(columns={'recorded_dttm': 'max_seq_dttm'})
-)
-
-# Step 3: Identify extra vent rows beyond scaffold
-_vent_plus_max = pd.merge(_hourly_vent_block, _max_times, on='encounter_block', how='left')
-_extra_rows = _vent_plus_max[
-    _vent_plus_max['recorded_dttm'] > _vent_plus_max['max_seq_dttm']
+# --- keep only rows with a known device category ---
+_resp_df = rs_waterfall.loc[
+    rs_waterfall['device_category'].notna()
+    & (rs_waterfall['device_category'].astype(str).str.strip() != ''),
+    ['encounter_block', 'recorded_dttm', 'device_category','tracheostomy']
 ].copy()
 
-# Step 4: Create gap-filler rows (O(1) dict lookup instead of O(N) scan)
-_max_times_dict = dict(zip(_max_times['encounter_block'], pd.to_datetime(_max_times['max_seq_dttm'])))
-_gap_rows = []
-for _enc_id, _group in _extra_rows.groupby('encounter_block'):
-    _max_time = _max_times_dict[_enc_id]
-    _first_extra_time = _group['recorded_dttm'].min()
+_resp_df = _resp_df.sort_values(['encounter_block', 'recorded_dttm'], kind='stable').reset_index(drop=True)
 
-    if _first_extra_time <= _max_time + timedelta(hours=1):
-        continue
+# --- flag IMV vs. not, and label contiguous runs of the same state ---
+_resp_df['is_imv'] = _resp_df['device_category'].astype(str).str.strip().str.lower().eq('imv')
+prev_state = _resp_df.groupby('encounter_block')['is_imv'].shift()
+_resp_df['run_id'] = (_resp_df['is_imv'] != prev_state).astype(bool).cumsum()   # first row of each encounter starts a new run
 
-    _gap_times = pd.date_range(
-        start=_max_time + timedelta(hours=1),
-        end=_first_extra_time - timedelta(hours=1),
-        freq='h'       #pandas 3 removed the uppercase 'H' alias
-    )
-
-    for _dt in _gap_times:
-        _gap_rows.append({
-            'encounter_block': _enc_id,
-            'recorded_date': _dt.date(),
-            'recorded_hour': _dt.hour,
-            'recorded_dttm': _dt
-        })
-
-_gap_df = pd.DataFrame(_gap_rows)
-
-# Step 5: Add all required columns to gap_df
-_missing_cols = set(_hourly_vent_block.columns) - set(_gap_df.columns)
-for _c in _missing_cols:
-    _gap_df[_c] = np.nan
-if len(_gap_df) > 0:
-    _gap_df = _gap_df[_hourly_vent_block.columns]
-
-# Step 6: Get scaffold rows with vent info via left join
-_scaffold_df = pd.merge(
-    _hourly_seq_block.drop(columns='recorded_dttm'),
-    _hourly_vent_block.drop(columns='recorded_dttm'),
-    on=['encounter_block', 'recorded_date', 'recorded_hour'],
-    how='left'
+# --- collapse each run to its first/last timestamp ---
+runs = (
+    _resp_df.groupby('run_id', sort=True)
+      .agg(encounter_block=('encounter_block', 'first'),
+           is_imv=('is_imv', 'first'),
+           run_start=('recorded_dttm', 'first'),
+           run_last=('recorded_dttm', 'last'),
+           tracheostomy=('tracheostomy', 'first'))
+      .reset_index(drop=True)
 )
 
-_gap_df = _gap_df.drop(columns='recorded_dttm', errors='ignore')
-_extra_rows = _extra_rows.drop(columns='recorded_dttm', errors='ignore')
-_extra_rows = _extra_rows.drop(columns='max_seq_dttm', errors='ignore')
+# start of the next run in the same encounter = extubation time
+runs['next_run_start'] = runs.groupby('encounter_block')['run_start'].shift(-1)
 
-# Step 7: Combine all three
-final_df_block_raw = pd.concat([_scaffold_df, _gap_df, _extra_rows], ignore_index=True)
+imv_episodes = runs.loc[runs['is_imv']].copy()
+imv_episodes['vent_start_dttm'] = imv_episodes['run_start']
+imv_episodes['vent_end_dttm'] = imv_episodes['next_run_start'].fillna(imv_episodes['run_last'])
 
-# Step 8: Sort
-final_df_block_raw = final_df_block_raw.sort_values(
-    by=['encounter_block', 'recorded_date', 'recorded_hour']
-).reset_index(drop=True)
+imv_episodes = (
+    imv_episodes[['encounter_block', 'vent_start_dttm', 'vent_end_dttm','tracheostomy']]
+    .sort_values(['encounter_block', 'vent_start_dttm'])
+    .reset_index(drop=True)
+)
 
-# Step 9: Add time_from_vent
-final_df_block_raw['time_from_vent'] = final_df_block_raw.groupby('encounter_block').cumcount()
+log(f"Total intubation episodes found: {imv_episodes.shape[0]}")
+    
+del _resp_df, runs
 
-_cols = ['encounter_block', 'recorded_date', 'recorded_hour', 'time_from_vent']
-_cols += [col for col in final_df_block_raw.columns if col not in _cols]
-final_df_block_raw = final_df_block_raw[_cols]
 
-log("Final hourly block shape:", final_df_block_raw.shape)
-log("Unique encounter_blocks:", final_df_block_raw['encounter_block'].nunique())
+# In[ ]:
+
+
+#Merge with the overall block vent initiation
+imv_episodes = pd.merge(block_df['encounter_block','block_vent_start_dttm'],
+                        imv_episodes,
+                        on='encounter_block',
+                        how='left')
+
+#Max out vent_end_dttm to block_vent_start_dttm + 72 hours
+imv_episodes['72h'] = imv_episodes['block_vent_start_dttm'] + pd.Timedelta(hours=72)
+imv_episodes = imv_episodes[ imv_episodes['vent_start_dttm'] <= imv_episodes['72h'] ]
+imv_episodes['vent_end_dttm'] = imv_episodes[['72h','vent_end_dttm']].max(axis=1)
+
+#Calculate the number of hours (by the filter above this would only include hours in the first 72 hours)
+imv_episodes['vent_hours'] = (imv_episodes['vent_end_dttm'] - imv_episodes['vent_start_dttm']).dt.total_seconds()/3600
+imv_hours_df = imv_episodes.groupby('encounter_block').agg(
+    vent_hours = ('vent_hours','sum'),
+    trach_at_start = ('tracheostomy','first')
+).reset_index()
+
+log(f"Unique encounter blocks with intubations data: {imv_hours_df['encounter_block'].nunique()}")
+
+del imv_episodes
 
 
 # ### (F) Exclusion Criteria
@@ -624,42 +517,25 @@ log("Unique encounter_blocks:", final_df_block_raw['encounter_block'].nunique())
 # In[ ]:
 
 
-# Count vent hours per block in first 72 hours
-_first_72_hours = final_df_block_raw[(final_df_block_raw['time_from_vent'] >= 0) & (final_df_block_raw['time_from_vent'] < 72)].copy()
-# Unbounded ffill is clinically appropriate here: IMV patients don't toggle on/off
-# frequently, and gaps represent documentation holes, not extubation events.
-_first_72_hours['hourly_on_vent'] = _first_72_hours.groupby('encounter_block')['hourly_on_vent'].ffill()
-_first_72_hours['hourly_trach'] = _first_72_hours.groupby('encounter_block')['hourly_trach'].ffill()
-_vent_hours_per_block = _first_72_hours.groupby('encounter_block')['hourly_on_vent'].sum()
-
 # Exclude blocks with imv for less than 4 hours
-_blocks_under_4 = _vent_hours_per_block[_vent_hours_per_block < 4].index
-_final_df_block = final_df_block_raw[~final_df_block_raw['encounter_block'].isin(_blocks_under_4)].copy()
+_blocks_under_4 = imv_hours_df[ imv_hours_df['vent_hours'] < 4 ]
+imv_hours_df = imv_hours_df[ imv_hours_df['vent_hours'] >= 4 ]
 
 strobe_excl = {}
-strobe_excl['F_blocks_with_vent_4_or_more'] = _final_df_block['encounter_block'].nunique()
+strobe_excl['F_blocks_with_vent_4_or_more'] = imv_hours_df['encounter_block'].nunique()
 strobe_excl['F_blocks_with_vent_less_than_4'] = len(_blocks_under_4)
 log(f"Unique encounter blocks with IMV >=4 hours: {strobe_excl['F_blocks_with_vent_4_or_more']}")
 log(f"Excluded {len(_blocks_under_4)} encounter blocks with <4 vent hours in first 72 hours of intubation.\n")
 
 # Exclude blocks with trach at the time of intubation
-_blocks_with_trach_at_intubation = _final_df_block[
-    (_final_df_block['time_from_vent'] == 0) &
-    (_final_df_block['hourly_trach'] == 1)
-]['encounter_block'].unique()
-
-log(f"Blocks with trach at intubation: {len(_blocks_with_trach_at_intubation)}")
-
-final_df_block_clean = _final_df_block[
-    ~_final_df_block['encounter_block'].isin(_blocks_with_trach_at_intubation)
-].copy()
-del _final_df_block, final_df_block_raw
-
+_blocks_with_trach_at_intubation = imv_hours_df[ imv_hours_df['trach_at_start'] ]
+imv_hours_df = imv_hours_df[ ~imv_hours_df['trach_at_start'] ]
 strobe_excl['F_final_blocks_with_trach_at_intubation'] = len(_blocks_with_trach_at_intubation)
-strobe_excl['F_final_blocks_without_trach_at_intubation'] = final_df_block_clean['encounter_block'].nunique()
-
-log(f"Excluded {len(_blocks_with_trach_at_intubation)} blocks with trach at intubation")
+strobe_excl['F_final_blocks_without_trach_at_intubation'] = imv_hours_df['encounter_block'].nunique()
+log(f"Blocks with trach at intubation: {len(_blocks_with_trach_at_intubation)}")
 log(f"Cohort size in hourly blocks: {strobe_excl['F_final_blocks_without_trach_at_intubation']}")
+
+del _blocks_under_4, _blocks_with_trach_at_intubation
 
 
 # ### Save Cohort Sample
@@ -670,7 +546,7 @@ log(f"Cohort size in hourly blocks: {strobe_excl['F_final_blocks_without_trach_a
 
 
 #Filter out from final cohort
-_eb_list = final_df_block_clean['encounter_block'].unique().tolist()
+_eb_list = imv_hours_df['encounter_block'].unique().tolist()
 block_df = block_df[block_df['encounter_block'].isin(_eb_list)]
 co.hospitalization.df = co.hospitalization.df[co.hospitalization.df['encounter_block'].isin(_eb_list)]
 co.adt.df = co.adt.df[co.adt.df['encounter_block'].isin(_eb_list)]
@@ -836,7 +712,38 @@ log('ICU types:')
 log(block_df['ICU_type'].value_counts())
 
 
-# ### (D) Check conformity of time columns
+# ### (D) Vitals
+# 
+# First and last vital
+
+# In[ ]:
+
+
+#Load vitals
+#NOTE: clifpy resolves filters/columns per table name (filters.get(table)), so both dicts must be
+#keyed by 'vitals'. Keying by the column name instead silently loads the entire vitals table.
+#Only hospitalization_id and recorded_dttm are used below (first/last vital per block).
+co.initialize(tables=['vitals'],
+    columns={'vitals': ['hospitalization_id', 'recorded_dttm']},
+    filters={'vitals': {'hospitalization_id': enc_map['hospitalization_id'].unique().tolist()}}
+)
+#Merge with encounter maps
+co.vitals.df = co.vitals.df.merge(enc_map, on='hospitalization_id', how='left')
+_vital_times_df = co.vitals.df.groupby('encounter_block').agg(
+    block_first_vital_dttm = ('recorded_dttm','min'),
+    block_last_vital_dttm = ('recorded_dttm','max')).reset_index()
+
+#Merge back with the full data
+block_df = block_df.merge(
+    _vital_times_df,
+    on=["encounter_block"],
+    how="left"
+)
+
+del _vital_times_df
+
+
+# ### (E) Check conformity of time columns
 
 # In[ ]:
 
@@ -905,7 +812,7 @@ strobe_excl['F_final_blocks_with_good_data'] = block_df['encounter_block'].nuniq
 block_df = block_df[~severe_violation_mask].reset_index(drop=True)
 
 
-# ### (E) PT Consult Orders
+# ### (F) PT Consult Orders
 
 # In[ ]:
 
@@ -1000,21 +907,23 @@ _ax.axis('off')
 
 
 _boxes = [
-    {"text": f"All adult encounters after date filter\n(n = {strobe_counts['A_after_year_filter']})", "xy": (0.5, 0.9)},
-    {"text": f"Linked Encounter Blocks\n(n = {strobe_counts['B_after_stitching']})", "xy": (0.5, 0.75)},
+    {"text": f"All adult encounters after date filter\n(n = {strobe_counts['A_after_age_filter']})", "xy": (0.5, 0.9)},
+    {"text": f"Linked Encounter Blocks\n(n = {strobe_counts['B_after_stitching']})", "xy": (0.5, 0.8)},
+    {"text": f"Encounter Blocks in year range ({year_min} - {year_max})\n(n = {strobe_counts['B2_encounter_blocks_in_year']})", "xy": (0.5, 0.7)},
     {"text": f"Encounter blocks receiving IMV\n(n = {strobe_counts['C_imv_encounter_blocks']})", "xy": (0.5, 0.6)},
-    {"text": f"Encounter blocks receiving IMV >= 4 hrs\n(n = {strobe_counts['F_blocks_with_vent_4_or_more']})", "xy": (0.5, 0.45)},
-    {"text": f"Encounter blocks not on trach\n(n = {strobe_counts['F_final_blocks_without_trach_at_intubation']})", "xy": (0.5, 0.3)},
-    {"text": f"Encounter blocks with valid data\n(n = {strobe_counts['F_final_blocks_with_good_data']})", "xy": (0.5, 0.15)},
+    {"text": f"Encounter blocks receiving IMV >= 4 hrs\n(n = {strobe_counts['F_blocks_with_vent_4_or_more']})", "xy": (0.5, 0.5)},
+    {"text": f"Encounter blocks not on trach\n(n = {strobe_counts['F_final_blocks_without_trach_at_intubation']})", "xy": (0.5, 0.4)},
+    {"text": f"Encounter blocks with valid data\n(n = {strobe_counts['F_final_blocks_with_good_data']})", "xy": (0.5, 0.3)},
+    {"text": f"Encounter blocks cloned\n(n = {strobe_counts['F_final_blocks_with_good_data'] - strobe_counts['X_blocks_with_pt_24h_prior']})", "xy": (0.5, 0.2)},
 ]
 
 _exclusions = [
-    {"text": f"Excluded: Admissions outside {year_min}-{year_max}\n(n = {strobe_counts['A_hosp_outside_year_window']})", "xy": (0.8, 0.95)},
-    {"text": f"Linked hospitalizations\n(n = {strobe_counts['B_stitched_hosp_ids']})", "xy": (0.8, 0.825)},
-    {"text": f"Excluded: Encounters on vent for <4 hrs\n(n = {strobe_counts['D_blocks_with_same_vent_start_end'] + strobe_counts['E_blocks_with_vital_end_before_vent_start'] + strobe_counts['F_blocks_with_vent_less_than_4']})", "xy": (0.8, 0.525)},
-    {"text": f"Excluded: Encounters with Tracheostomy\n(n = {strobe_counts['F_final_blocks_with_trach_at_intubation']})", "xy": (0.8, 0.375)},
-    {"text": f"Excluded: Encounters with bad date-time data (n = {strobe_counts['X_blocks_with_bad_time_data']})", "xy": (0.8, 0.225)},
-    {"text": f"Excluded: Encounters with PT consult 24 hours\nprior to IMV (n = {strobe_counts['X_blocks_with_pt_24h_prior']})", "xy": (0.8, 0.1)},
+    {"text": f"Linked hospitalizations\n(n = {strobe_counts['B_stitched_hosp_ids']})", "xy": (0.8, 0.85)},
+    {"text": f"Excluded: Out of year range\n(n = {strobe_counts['B2_encounter_blocks_out_of_year']})", "xy":(0.8, 0.75)}
+    {"text": f"Excluded: Encounters on vent for <4 hrs\n(n = {strobe_counts['D_blocks_with_same_vent_start_end'] + strobe_counts['E_blocks_with_vital_end_before_vent_start'] + strobe_counts['F_blocks_with_vent_less_than_4']})", "xy": (0.8, 0.55)},
+    {"text": f"Excluded: Encounters with Tracheostomy\n(n = {strobe_counts['F_final_blocks_with_trach_at_intubation']})", "xy": (0.8, 0.45)},
+    {"text": f"Excluded: Encounters with bad date-time data (n = {strobe_counts['X_blocks_with_bad_time_data']})", "xy": (0.8, 0.35)},
+    {"text": f"Excluded: Encounters with PT consult 24 hours\nprior to IMV (n = {strobe_counts['X_blocks_with_pt_24h_prior']})", "xy": (0.8, 0.25)},
 ]
 
 # Draw main boxes and arrows

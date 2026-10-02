@@ -460,7 +460,8 @@ co.create_wide_dataset(
         'patient_assessments':pat_ass_of_interest
     },
     encounter_blocks = enc_map['encounter_block'].tolist(),
-    cohort_df = _cohort
+    cohort_df = _cohort,
+    memory_limit = '64GB'
 )
 del _cohort
     
@@ -558,7 +559,8 @@ agg_plan = {
 _temp_hourly_df = co.convert_wide_to_hourly(agg_plan,
                                             id_name='encounter_block',
                                             hourly_window=1,
-                                            fill_gaps=True)
+                                            fill_gaps=True,
+                                            memory_limit = '64GB')
 
 
 # In[ ]:
