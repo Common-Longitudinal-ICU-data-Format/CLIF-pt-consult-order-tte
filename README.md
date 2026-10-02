@@ -36,7 +36,7 @@
 ## Detailed Instructions for running the project
 
 ### 1. Requirements
-The project requires **Python 3.11+** with `uv` installed and **R 4.x**. The Jupyter notebooks are converted to just Python so Jupyter itself is not required. Uses `UV` and `renv`, respectively, for dependencies.
+The project requires **Python 3.12** with `uv` installed and **R 4.5.3**. The Jupyter notebooks are converted to just Python so Jupyter itself is not required. Uses `UV` and `renv`, respectively, for dependencies.
 
 ### 2. Download This Repository
 
@@ -53,6 +53,7 @@ bash run_pipeline.sh
 Run it with `bash` (not `source`): the script uses `set -euo pipefail`, so if you
 `source` it, any failing step will exit your interactive shell/terminal.
 These scripts install the required Python and R dependencies.
+
 ### Pipeline steps
 
 | Step | Script | Language | Description |
@@ -61,11 +62,11 @@ These scripts install the required Python and R dependencies.
 | 2 | `2_data_gathering.py` | Python | Gathers and aggregates data from multiple CLIF tables, creates "time_bin" and "hourly" data sets. |
 | 3 | `3_calculations.py` | Python | Mobilization analysis, outcomes definitions |
 | 4 | `4_table_one.R` | R | Table 1, Graphs, setup for CCW |
-| 5 | `5_ccw.R` | R | Clone censor weight, outcomes models, bootstrapping |
+| 5 | `5_ccw_survival.R` | R | Clone censor weight, outcomes models, bootstrapping |
 
 ## Output
 
-We want the output saved to `output/final` and `output/logs`.
+Return the output saved to `output/final` and `output/logs`.
 
 ## Authors
 
