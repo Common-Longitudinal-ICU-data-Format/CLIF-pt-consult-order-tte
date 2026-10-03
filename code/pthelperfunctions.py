@@ -27,7 +27,7 @@ def ensure_datetime(s: pd.Series) -> pd.Series:
         return s  # couldn't parse; leave as-is
     if s.dt.tz is None:
         # NOTE: this assumes naive values are already local time.
-        s = s.dt.tz_localize(my_tz)
+        s = s.dt.tz_localize(my_tz, ambiguous="infer", nonexistent="shift_forward")
     return s.dt.tz_convert(my_tz)  # always re-convert so the tz object is the same
 
 
@@ -41,7 +41,7 @@ def convert_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
         
     return df
 
-def load_data(data_set: str, name: str, folder: str = '', type: str = None) -> pd.DataFrame:
+def load_data(data_set: str, name: str, folder: str = '', type: str = None, convert_dttm: bool = True) -> pd.DataFrame:
     """Loads a table from the CLIF/MIMIC/mobilization/output data sets. Input: string with table name. Output: DataFrame. Automatically converts to my_tz."""
     
     def _load_path(path: str, file_type: str) -> pd.DataFrame:
@@ -71,8 +71,11 @@ def load_data(data_set: str, name: str, folder: str = '', type: str = None) -> p
                 f"No file found for '{name}' in '{data_set}' "
                 f"(tried parquet, csv, csv.gz)."
             )
-
-    df = convert_datetime_columns(df)
+    if convert_dttm:
+        df = convert_datetime_columns(df)
+    else:
+        print(f"WARNING: Date time not converted when loading data for {data_set} {name}")
+    
     return df
 
 def missing_summary(in_df: pd.DataFrame, f_name=None):
@@ -364,7 +367,7 @@ class hourly_blocks:
         NOTES: The data frame must have columns 'encounter_block':int and 'time_from_vent':int.
         '''
         if in_name:
-            self.df = load_data('output_folder',in_name, folder='intermediate')
+            self.df = load_data('output_folder',in_name, folder='intermediate', convert_dttm = False)
         elif in_df is not None:
             self.df = in_df.copy()
         else:

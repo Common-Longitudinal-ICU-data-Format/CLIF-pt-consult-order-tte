@@ -595,9 +595,12 @@ _temp_hourly_df["window_end_dttm"] = end_naive.dt.tz_localize(
     helper.my_tz, ambiguous=~same_wall_time, nonexistent="shift_forward"
 )
 
-# Sanity check
+#Sanity check
 dur = _temp_hourly_df["window_end_dttm"] - _temp_hourly_df["window_start_dttm"]
 log(f"Windows not exactly 1 hour: {(dur.notna() & (dur != pd.Timedelta(hours=1))).sum()}")
+
+#Remove the other dttm columns carried in by the wide data set not used in analysis
+_temp_hourly_df.drop(columns=['in_dttm_c','out_dttm_c'], inplace=True)
 
 
 # In[ ]:
