@@ -910,7 +910,7 @@ del rass_df
 #Braden Mobility Score
 
 #Filter ass_df for braden_mob only
-braden_df = co.patient_assessments.df[co.patient_assessments.df['assessment_category'] == 'braden_mobility'].copy()
+braden_df = co.patient_assessments.df[co.patient_assessments.df['assessment_category'].str.lower() == 'braden_mobility'].copy()
 braden_df.rename(columns={'numerical_value': 'braden_mobility'}, inplace=True)
 
 #Default aggregation for the first 24 hours
@@ -941,8 +941,8 @@ del braden_df
 
 #CAM-ICU
 #Filter ass_df for braden_mob only
-cam_df = co.patient_assessments.df[co.patient_assessments.df['assessment_category'] == 'cam_total'].copy()
-cam_df['cam_icu'] = np.where(cam_df['categorical_value'].notna() & (cam_df['categorical_value'] == 'Positive'),1,0) #Convert categorical to binary
+cam_df = co.patient_assessments.df[co.patient_assessments.df['assessment_category'].str.lower() == 'cam_total'].copy()
+cam_df['cam_icu'] = np.where(cam_df['categorical_value'].notna() & (cam_df['categorical_value'].str.lower() == 'positive'),1,0) #Convert categorical to binary
 
 #Default aggregation for the first 24 hours
 block_df = block_df.merge(helper.aggregate_by_time(cam_df, 'cam_icu', agg_func='flag'), on='encounter_block', how='left')

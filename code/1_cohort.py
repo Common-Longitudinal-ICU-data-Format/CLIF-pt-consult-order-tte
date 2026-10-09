@@ -824,6 +824,7 @@ block_df = block_df[~severe_violation_mask].reset_index(drop=True)
 
 #load (loading from output since key_icu_orders is not a defined table in CLIFpy and we just created it in the prior script
 _pt_df = helper.load_data("clif_folder","clif_key_icu_orders")
+_pt_df["order_category"] = _pt_df["order_category"].str.lower()
 
 #Filter for PT orders only
 _chart_mask = _pt_df["order_category"].isin(['pt_evaluation','pt_treat'])
