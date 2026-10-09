@@ -710,6 +710,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   fit_dead_fg_surv <<- fit_dc
 
   dead_FG_surv_30_con  <- standardized_contrast_FG(fit_dead_fg_surv, sample_df, 30)
+  dead_FG_surv_90_con  <- standardized_contrast_FG(fit_dead_fg_surv, sample_df, 90)
   
   #### Hospital mortality: Fine-Grey (against discharge alive, with ICU type interaction) ###
   fg_dc  <- fg_expand(sample_df, "dc_fg_time", "dc_fg_cause", mv_rhs_fg_dc)
@@ -721,6 +722,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   fit_dc$fg_basehaz <- basehaz(fit_dc, centered = FALSE)
   fit_dead_fg_icuint <<- fit_dc
   dead_FG_icuint_30_con  <- standardized_contrast_FG(fit_dead_fg_icuint, sample_df, 30)
+  dead_FG_icuint_90_con  <- standardized_contrast_FG(fit_dead_fg_icuint, sample_df, 90)
   
   #### Hospital mortality: Fine-Grey (against discharge alive, timereg package) ###
   #model = "prop" is the Fine-Gray model on the cloglog scale:
@@ -738,6 +740,8 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   )
   dead_FG_timereg_30_con  <- standardized_contrast_FG(fit_dead_fg_timereg,
                                                       sample_df, 30, use_timereg = TRUE)
+  dead_FG_timereg_90_con  <- standardized_contrast_FG(fit_dead_fg_timereg,
+                                                      sample_df, 90, use_timereg = TRUE)
   
   #### ICU LOS: Fine-Grey (against death, survival package) ###
   fg_icu  <- fg_expand(sample_df, "icu_fg_time", "icu_fg_cause", mv_rhs)
@@ -749,6 +753,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   fit_icu$fg_basehaz <- basehaz(fit_icu, centered = FALSE)
   fit_icu_fg_surv <<- fit_icu
   icu_FG_surv_10_con  <- standardized_contrast_FG(fit_icu_fg_surv, sample_df, 10)
+  icu_FG_surv_30_con  <- standardized_contrast_FG(fit_icu_fg_surv, sample_df, 30)
   
   #### ICU LOS: Fine-Grey (against death, with ICU type interaction) ###
   fg_icu  <- fg_expand(sample_df, "icu_fg_time", "icu_fg_cause", mv_rhs_fg_icu)
@@ -760,6 +765,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   fit_icu$fg_basehaz <- basehaz(fit_icu, centered = FALSE)
   fit_icu_fg_icuint <<- fit_icu
   icu_FG_icuint_10_con  <- standardized_contrast_FG(fit_icu_fg_icuint, sample_df, 10)
+  icu_FG_icuint_30_con  <- standardized_contrast_FG(fit_icu_fg_icuint, sample_df, 30)
   
   #### ICU LOS: Fine-Grey (against death, timereg package) ###
   fit_icu_fg_timereg <<- comp.risk(
@@ -772,6 +778,8 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   )
   icu_FG_timereg_10_con  <- standardized_contrast_FG(fit_icu_fg_timereg,
                                                      sample_df, 10, use_timereg=TRUE)
+  icu_FG_timereg_30_con  <- standardized_contrast_FG(fit_icu_fg_timereg,
+                                                     sample_df, 30, use_timereg=TRUE)
   
   #Organize outcome into a single row of a data frame
   output_df <- data.frame(
@@ -790,16 +798,28 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
     dead_365_E  = dead_365_con$mean_pred_E,
     dead_FG_surv_30_N = dead_FG_surv_30_con$frac_pred_N,
     dead_FG_surv_30_E = dead_FG_surv_30_con$frac_pred_E,
+    dead_FG_surv_90_N = dead_FG_surv_90_con$frac_pred_N,
+    dead_FG_surv_90_E = dead_FG_surv_90_con$frac_pred_E,
     dead_FG_icuint_30_N = dead_FG_icuint_30_con$frac_pred_N,
     dead_FG_icuint_30_E = dead_FG_icuint_30_con$frac_pred_E,
+    dead_FG_icuint_90_N = dead_FG_icuint_90_con$frac_pred_N,
+    dead_FG_icuint_90_E = dead_FG_icuint_90_con$frac_pred_E,
     dead_FG_timereg_30_N = dead_FG_timereg_30_con$frac_pred_N,
     dead_FG_timereg_30_E = dead_FG_timereg_30_con$frac_pred_E,
+    dead_FG_timereg_90_N = dead_FG_timereg_90_con$frac_pred_N,
+    dead_FG_timereg_90_E = dead_FG_timereg_90_con$frac_pred_E,
     icu_FG_surv_10_N = icu_FG_surv_10_con$frac_pred_N,
     icu_FG_surv_10_E = icu_FG_surv_10_con$frac_pred_E,
+    icu_FG_surv_30_N = icu_FG_surv_30_con$frac_pred_N,
+    icu_FG_surv_30_E = icu_FG_surv_30_con$frac_pred_E,
     icu_FG_icuint_10_N = icu_FG_icuint_10_con$frac_pred_N,
     icu_FG_icuint_10_E = icu_FG_icuint_10_con$frac_pred_E,
+    icu_FG_icuint_30_N = icu_FG_icuint_30_con$frac_pred_N,
+    icu_FG_icuint_30_E = icu_FG_icuint_30_con$frac_pred_E,
     icu_FG_timereg_10_N = icu_FG_timereg_10_con$frac_pred_N,
-    icu_FG_timereg_10_E = icu_FG_timereg_10_con$frac_pred_E
+    icu_FG_timereg_10_E = icu_FG_timereg_10_con$frac_pred_E,
+    icu_FG_timereg_30_N = icu_FG_timereg_30_con$frac_pred_N,
+    icu_FG_timereg_30_E = icu_FG_timereg_30_con$frac_pred_E
   )
   
   #Calculate differences and odd-ratios
@@ -815,17 +835,29 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   output_df$dead_365_RR <- output_df$dead_365_E / output_df$dead_365_N
   output_df$dead_FG_surv_30_diff <- output_df$dead_FG_surv_30_E - output_df$dead_FG_surv_30_N
   output_df$dead_FG_surv_30_RR <- output_df$dead_FG_surv_30_E / output_df$dead_FG_surv_30_N
+  output_df$dead_FG_surv_90_diff <- output_df$dead_FG_surv_90_E - output_df$dead_FG_surv_90_N
+  output_df$dead_FG_surv_90_RR <- output_df$dead_FG_surv_90_E / output_df$dead_FG_surv_90_N
   output_df$dead_FG_icuint_30_diff <- output_df$dead_FG_icuint_30_E - output_df$dead_FG_icuint_30_N
   output_df$dead_FG_icuint_30_RR <- output_df$dead_FG_icuint_30_E / output_df$dead_FG_icuint_30_N
+  output_df$dead_FG_icuint_90_diff <- output_df$dead_FG_icuint_90_E - output_df$dead_FG_icuint_90_N
+  output_df$dead_FG_icuint_90_RR <- output_df$dead_FG_icuint_90_E / output_df$dead_FG_icuint_90_N
   output_df$dead_FG_timereg_30_diff <- output_df$dead_FG_timereg_30_E - output_df$dead_FG_timereg_30_N
   output_df$dead_FG_timereg_30_RR <- output_df$dead_FG_timereg_30_E / output_df$dead_FG_timereg_30_N
+  output_df$dead_FG_timereg_90_diff <- output_df$dead_FG_timereg_90_E - output_df$dead_FG_timereg_90_N
+  output_df$dead_FG_timereg_90_RR <- output_df$dead_FG_timereg_90_E / output_df$dead_FG_timereg_90_N
   output_df$icu_FG_surv_10_diff <- output_df$icu_FG_surv_10_E - output_df$icu_FG_surv_10_N
   output_df$icu_FG_surv_10_RR <- output_df$icu_FG_surv_10_E / output_df$icu_FG_surv_10_N
+  output_df$icu_FG_surv_30_diff <- output_df$icu_FG_surv_30_E - output_df$icu_FG_surv_30_N
+  output_df$icu_FG_surv_30_RR <- output_df$icu_FG_surv_30_E / output_df$icu_FG_surv_30_N
   output_df$icu_FG_icuint_10_diff <- output_df$icu_FG_icuint_10_E - output_df$icu_FG_icuint_10_N
   output_df$icu_FG_icuint_10_RR <- output_df$icu_FG_icuint_10_E / output_df$icu_FG_icuint_10_N
+  output_df$icu_FG_icuint_30_diff <- output_df$icu_FG_icuint_30_E - output_df$icu_FG_icuint_30_N
+  output_df$icu_FG_icuint_30_RR <- output_df$icu_FG_icuint_30_E / output_df$icu_FG_icuint_30_N
   output_df$icu_FG_timereg_10_diff <- output_df$icu_FG_timereg_10_E - output_df$icu_FG_timereg_10_N
   output_df$icu_FG_timereg_10_RR <- output_df$icu_FG_timereg_10_E / output_df$icu_FG_timereg_10_N
-  
+  output_df$icu_FG_timereg_30_diff <- output_df$icu_FG_timereg_30_E - output_df$icu_FG_timereg_30_N
+  output_df$icu_FG_timereg_30_RR <- output_df$icu_FG_timereg_30_E / output_df$icu_FG_timereg_30_N
+    
   return(output_df)
 }
 
