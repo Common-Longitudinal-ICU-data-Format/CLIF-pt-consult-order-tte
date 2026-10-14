@@ -822,6 +822,10 @@ log(f"Missing heart rate at block level: {sum(block_df['heart_rate_0_24h_mean'].
 time_bin.gather_time_bins(hr_df,'heart_rate', fill_with='ffill')
 log(f"Missing heart rate at time_bin level: {sum(time_bin.df['heart_rate_mean'].isna())}")
 
+#Time Bin data
+time_bin.gather_time_bins(hr_df,'heart_rate', agg_func='max', fill_with='ffill')
+log(f"Missing heart rate at time_bin level: {sum(time_bin.df['heart_rate_max'].isna())}")
+
 del hr_df
 
 
@@ -838,6 +842,10 @@ log(f"Missing MAP at block level: {sum(block_df['map_0_24h_mean'].isna())}")
 #Time Bin data
 time_bin.gather_time_bins(map_df,'map', fill_with='ffill')
 log(f"Missing MAP at time_bin level: {sum(time_bin.df['map_mean'].isna())}")
+
+#Time Bin data
+time_bin.gather_time_bins(map_df,'map',  agg_func='min', fill_with='ffill')
+log(f"Missing MAP at time_bin level: {sum(time_bin.df['map_min'].isna())}")
 
 del map_df
 

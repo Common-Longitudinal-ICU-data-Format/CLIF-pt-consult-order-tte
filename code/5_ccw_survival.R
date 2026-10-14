@@ -1733,6 +1733,9 @@ if (run_sub_group) {
 # =============================================================================
 # END
 # =============================================================================
+image_file_path <- file.path(output_folder, "intermediate",
+                             "05_cww_image.RData")
+save.image(file=image_file_path)
 sink(type = "message")
 sink()
 close(sink_log)
