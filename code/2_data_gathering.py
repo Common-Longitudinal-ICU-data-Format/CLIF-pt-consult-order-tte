@@ -464,7 +464,7 @@ co.create_wide_dataset(
     memory_limit = '64GB'
 )
 del _cohort
-    
+
 
 
 # ### Add MAP & RR where missing
@@ -657,7 +657,7 @@ for col in inter:
     log(f'Filling hourly for {col} _max and _last. Empty cells {sum(hourly.df[f'{col}_max'].isna()) + sum(hourly.df[f'{col}_last'].isna())}')
     hourly.hourly_fill(f'{col}_last','ffill') #Forward fill first
     hourly.df[f'{col}_max'] = np.where(hourly.df[f'{col}_max'].isna(), hourly.df[f'{col}_last'],hourly.df[f'{col}_max'])
-    
+
 #Forward Fill from last for min rows
 inter = list(set(agg_plan['min']) & set(agg_plan['last']))
 for col in inter:
@@ -866,6 +866,10 @@ log(f"Missing FiO2 at block level: {sum(block_df['fio2_set_0_24h_mean'].isna())}
 time_bin.gather_time_bins(fio2_df,'fio2_set', fill_with='ffill')
 log(f"Missing FiO2 at time_bin level: {sum(time_bin.df['fio2_set_mean'].isna())}")
 
+#Time Bin data (worst value)
+time_bin.gather_time_bins(fio2_df,'fio2_set', agg_func='max', fill_with='ffill')
+log(f"Missing FiO2 max at time_bin level: {sum(time_bin.df['fio2_set_max'].isna())}")
+
 del fio2_df
 
 
@@ -882,6 +886,10 @@ log(f"Missing FiO2 at block level: {sum(block_df['peep_set_0_24h_mean'].isna())}
 #Time Bin data
 time_bin.gather_time_bins(peep_df,'peep_set', fill_with='ffill')
 log(f"Missing FiO2 at time_bin level: {sum(time_bin.df['peep_set_mean'].isna())}")
+
+#Time Bin data (worst value)
+time_bin.gather_time_bins(peep_df,'peep_set', agg_func='max', fill_with='ffill')
+log(f"Missing PEEP max at time_bin level: {sum(time_bin.df['peep_set_max'].isna())}")
 
 del peep_df
 
@@ -966,37 +974,7 @@ del cam_df
 # In[ ]:
 
 
-#If we need to convert admission year from MIMIC date to real dates.
-if use_mimic:    
-    log('Using MIMIC for admission year.')
-    #load
-    patient_mimic_df = helper.load_data("mimic","patients", folder='hosp', type='csv.gz')
-    patient_mimic_df.rename(columns={'subject_id': 'patient_id'}, inplace=True)
-    patient_mimic_df['patient_id'] = patient_mimic_df['patient_id'].astype(str)
-    
-    #filter
-    patient_mimic_df = patient_mimic_df[patient_mimic_df['patient_id'].isin( block_df['patient_id'] )]
-    print(f"Unique MIMIC patient id: {patient_mimic_df['patient_id'].nunique()}")
-    print(f"Unique Block patient id: {block_df['patient_id'].nunique()}")
-    
-    #merge
-    merged_patient_df = pd.merge(
-        block_df[['encounter_block','patient_id','block_vent_start_dttm']],
-        patient_mimic_df,
-        on='patient_id',
-        how='left'
-    )
-
-    #Admission Year (based on estimate from anchor year
-    merged_patient_df["anchor_year_group"] = merged_patient_df["anchor_year_group"].str.slice(0, 4).astype("Int64") + 1 #Convert achor year group to an integer
-    merged_patient_df["admission_year"] = merged_patient_df['block_vent_start_dttm'].dt.year.astype("Int64") - merged_patient_df["anchor_year"] + merged_patient_df["anchor_year_group"]
-    
-    block_df = block_df.merge(merged_patient_df[['admission_year','encounter_block']],on='encounter_block', how='left')
-    
-    del patient_mimic_df, merged_patient_df
-else:
-    block_df["admission_year"] = block_df['block_vent_start_dttm'].dt.year.astype("Int64")
-
+#Admission year (including the MIMIC anchor year conversion) is calculated in 1_cohort and carried in block_df.
 log(f"Encounters with admission year missing in final data: {sum(block_df['admission_year'].isna())}")
 print(f"Block Length: {len(block_df)}")
 print(f"Unique Encounter Block: {block_df['encounter_block'].nunique()}")

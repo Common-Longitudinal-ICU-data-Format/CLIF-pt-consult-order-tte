@@ -21,6 +21,9 @@
 #           (with marginal effect incidence curves)
 #       * Competing ICU mortality versus ICU discharge alive - FineGray
 #           (with marginal effect incidence curves)
+#       * Discharge destination - Multinomial logistic (baseline covariates only)
+#   - Sensitivity analyses: worst values as the time-varying covariates, and
+#     first admission per patient only.
 #   - Bootstrapping with non-parametric re-sampling with replacement.
 #   - Fine-Gray models were built in a few different ways using the survival
 #     package and the timereg package.
@@ -29,7 +32,7 @@
 # ---- Packages ----------------------------------------------------------------
 library(tidyverse); library(pscl); library(ggplot2); library(dplyr); library(glue)
 library(openxlsx); library(tibble); library(cobalt); library(this.path); library(data.table)
-library(scales); library(arrow); library(survival); library(timereg)
+library(scales); library(arrow); library(survival); library(timereg); library(nnet)
 
 # ---- Paths -------------------------------------------------------------------
 work_dir      <- dirname(dirname(this.path()))
@@ -45,8 +48,9 @@ Sys.time()
 sessionInfo()
 
 #----- Options -----------------------------------------------------------------
-resample_N <- 500 #Effective bootstrapping resamples.
-run_sub_group <- FALSE
+resample_N <- 5 #Effective bootstrapping resamples.
+#resample_N <- 500 #Effective bootstrapping resamples.
+run_sensitivity <- TRUE
 input_file_path <- file.path(output_folder, "intermediate",
                              "block_and_time_bins_for_stats.parquet")
 use_recent_start_logic <- FALSE
@@ -79,6 +83,13 @@ data[fac_vars] <- lapply(data[fac_vars], function(x) {
   x[x == ""] <- NA
   factor(x)
 })
+
+# ---- Discharge destination (outcome) ---------
+# Clustered in 3_calculations. First level (Home) is the multinomial reference.
+dc_levels <- c("Home", "Rehabilitation", "Hospice/Expired", "Other")
+dc_keys   <- c("home", "rehab", "hospice_expired", "other") #Column names in outcome tables
+print(table(data$discharge_category, useNA = "ifany"))
+data$discharge_category <- factor(data$discharge_category, levels = dc_levels)
 
 # ---- Binaries --------------------------------
 binary_vars <- c("pressor_flag", "paralytics_flag",
@@ -122,17 +133,27 @@ base_vars <- c("age", "sex_category", "race_category", "ethnicity_category",
 tv_vars <- c("heart_rate_mean", "map_mean", "fio2_set_mean", "peep_set_mean",
              "ne_calc_mean", "paralytics_flag")
 
+# Time-varying covariates for the worst values sensitivity analysis
+tv_vars_worst <- c("heart_rate_max", "map_min", "fio2_set_max", "peep_set_max",
+                   "ne_calc_max", "paralytics_flag")
+
 # Outcome Variables
 out_vars <- c("vent_free_days","icu_los_days","is_dead_hosp","is_dead_30",
               "is_dead_365","imv_to_discharge_days", "icu_los_first_days",
-              "is_dead_icu")
+              "is_dead_icu", "discharge_category")
 
 #All covars, used to determine complete case analysis.
 all_covars <- c(base_vars, tv_vars)
 
+# # Combined covariates & columns needed for complete analysis of the CCW.
+# all_vars <- c("encounter_block","patient_id","time_bin","bin_start","bin_end","pt_order",
+#                 "pt_now","pt_post48_IMV",base_vars, tv_vars, out_vars)
+
 # Combined covariates & columns needed for complete analysis of the CCW.
-all_vars <- c("encounter_block","patient_id","time_bin","bin_start","bin_end","pt_order",
-                "pt_now","pt_post48_IMV",base_vars, tv_vars, out_vars)
+# Includes the sensitivity analysis variables so they are not dropped.
+all_vars <- unique(c("encounter_block","patient_id","admission_index","time_bin",
+                     "bin_start","bin_end","pt_order","pt_now","pt_post48_IMV",
+                     base_vars, tv_vars, tv_vars_worst, out_vars))
 
 bin_df <- subset(data, select = all_vars)
 bin_df <- bin_df[order(bin_df$encounter_block, bin_df$time_bin), ]
@@ -174,7 +195,7 @@ separate_complete_frames <- function(df,
   df_N$clone <- factor("N", levels = c("N", "E"))
   #Keep uncensored row or rows where the censoring event happens.
   df_N <- df_N %>% filter( (PT_censor_N == 0) | (pt_now == 1))
-
+  
   df_E <- good_df
   df_E$clone <- factor("E", levels = c("N", "E"))
   #All censoring occurs on the last time_bin so no need to filter.
@@ -204,7 +225,7 @@ fit_interval_weights <- function(clone_df,
                                  stabilize = FALSE) {
   # pt_now_logic = TRUE  → Clone E weighting (use pt_now flag)
   # pt_now_logic = FALSE → Clone N weighting (always 1/p_uncens when uncensored)
-
+  
   #Probability of censoring formula
   rhs_formula <- paste(c(base_vars, tv_vars), collapse = " + ")
   form        <- as.formula(paste(censor_col, "~", rhs_formula))
@@ -532,8 +553,33 @@ standardized_contrast <- function(fit, data, clone_var = "clone") {
   pred_E <- predict(fit, newdata = dE, type = "response")
   pred_N <- predict(fit, newdata = dN, type = "response")
   pred <- tibble(mean_pred_E    = weighted.mean(pred_E, w = data$IPCW, na.rm = TRUE),
-         mean_pred_N    = weighted.mean(pred_N, w = data$IPCW, na.rm = TRUE))
+                 mean_pred_N    = weighted.mean(pred_N, w = data$IPCW, na.rm = TRUE))
   
+  return(pred)
+}
+
+#Function to calculate treatment effect with multinomial model + data.
+#Returns one column per discharge destination and clone, e.g. dc_home_E.
+standardized_contrast_multinom <- function(fit, data, clone_var = "clone") {
+  dE <- data; dN <- data
+  dE[[clone_var]] <- factor("E", levels = levels(data[[clone_var]]))
+  dN[[clone_var]] <- factor("N", levels = levels(data[[clone_var]]))
+  
+  mean_probs <- function(newdata) {
+    p <- predict(fit, newdata = newdata, type = "probs")
+    #A two level fit (a level missing in a resample) returns a vector
+    if (is.null(dim(p))) p <- cbind(1 - p, p)
+    colnames(p) <- fit$lev
+    #Levels missing from the fit get a predicted probability of 0
+    sapply(dc_levels, function(lev) {
+      if (lev %in% colnames(p)) weighted.mean(p[, lev], w = data$IPCW, na.rm = TRUE) else 0
+    })
+  }
+  prob_E <- mean_probs(dE)
+  prob_N <- mean_probs(dN)
+  
+  pred <- as_tibble(as.list(c(setNames(prob_E, paste0("dc_", dc_keys, "_E")),
+                              setNames(prob_N, paste0("dc_", dc_keys, "_N")))))
   return(pred)
 }
 
@@ -557,20 +603,21 @@ standardized_contrast <- function(fit, data, clone_var = "clone") {
 #The IPCW is passed to finegray() as the case weight: finegray returns
 #fgwt = censoring weight * case weight, so coxph(weights = fgwt) carries both.
 #(G(t) itself is estimated unweighted by finegray.)
+
 fg_expand <- function(data, time_var, cause_var, rhs, weight_var = "IPCW") {
   df <- as.data.frame(data)
-
+  
   #finegray() requires a factor whose FIRST level is censoring.
   df$fg_event   <- factor(df[[cause_var]], levels = c(0, 1, 2),
                           labels = c("censored", "cause1", "cause2"))
   df$fg_time    <- df[[time_var]]
   df$fg_case_wt <- df[[weight_var]]
-
+  
   #Right hand side variables are only carried through to the expanded data
   #(only a strata() term would change the censoring model), so keep the model
   #covariates plus the subject id used for the robust variance.
   keep <- unique(c(all.vars(as.formula(paste("~", rhs))), "eb_clone"))
-
+  
   finegray(as.formula(paste("Surv(fg_time, fg_event) ~",
                             paste(keep, collapse = " + "))),
            data    = df,
@@ -583,10 +630,10 @@ fg_expand <- function(data, time_var, cause_var, rhs, weight_var = "IPCW") {
 #Per-subject predicted CIF
 fg_predict_cif <- function(fit, newdata, times) {
   bh <- if (!is.null(fit$fg_basehaz)) fit$fg_basehaz else basehaz(fit, centered = FALSE)
-
+  
   #Step function: H0 = 0 before the first event, last value carried forward
   H0 <- c(0, bh$hazard)[findInterval(times, bh$time) + 1L]
-
+  
   cf <- coef(fit)
   cf[is.na(cf)] <- 0   #aliased coefficient, e.g. an empty level in a resample
   mm <- model.matrix(delete.response(terms(fit)),
@@ -594,7 +641,7 @@ fg_predict_cif <- function(fit, newdata, times) {
                      contrasts.arg = fit$contrasts,
                      xlev          = fit$xlevels)
   lp <- as.vector(mm[, names(cf), drop = FALSE] %*% cf)
-
+  
   1 - exp(-outer(exp(lp), H0))
 }
 
@@ -667,34 +714,41 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   #Models declared globally so they can be reviewed for the original sample.
   ##### VFD: ZINB #####
   fit_vfd       <<- zeroinfl(as.formula(paste("vent_free_days ~", mv_rhs, "| 1")),
-                               data = sample_df, dist = "negbin", weights = IPCW)
+                             data = sample_df, dist = "negbin", weights = IPCW)
   vfd_con       <- standardized_contrast(fit_vfd, sample_df)
   
   ##### ICU LOS: Poisson #####
   fit_icu_los   <<- glm(as.formula(paste("icu_los_days ~", mv_rhs)),
-                          data = sample_df, family = poisson(),   weights = IPCW)
+                        data = sample_df, family = poisson(),   weights = IPCW)
   icu_con       <- standardized_contrast(fit_icu_los, sample_df)
   
   ##### Hospital mortality: Binary #####
   fit_dead_hosp <<- glm(as.formula(paste("is_dead_hosp ~", mv_rhs)),
-                          data = sample_df, family = binomial(),  weights = IPCW)
+                        data = sample_df, family = binomial(),  weights = IPCW)
   dead_hosp_con <- standardized_contrast(fit_dead_hosp, sample_df)
   
   ##### 30-day mortality: Binary #####
   fit_dead_30   <<- glm(as.formula(paste("is_dead_30 ~", mv_rhs)),
-                          data = sample_df, family = binomial(),  weights = IPCW)
+                        data = sample_df, family = binomial(),  weights = IPCW)
   dead_30_con   <- standardized_contrast(fit_dead_30, sample_df)
   
   ##### 1-year mortality: Binary #####
   fit_dead_365  <<- glm(as.formula(paste("is_dead_365 ~", mv_rhs)),
-                          data = sample_df, family = binomial(),  weights = IPCW)
+                        data = sample_df, family = binomial(),  weights = IPCW)
   dead_365_con  <- standardized_contrast(fit_dead_365, sample_df)
+  
+  ##### Discharge destination: Multinomial (baseline covariates only) #####
+  #Hessian is only needed for the regression summary of the original sample.
+  fit_discharge <<- multinom(as.formula(paste("discharge_category ~", mv_rhs)),
+                             data = sample_df, weights = IPCW,
+                             Hess = (iteration_n == 0), maxit = 1000, trace = FALSE)
+  discharge_con <- standardized_contrast_multinom(fit_discharge, sample_df)
   
   #### Hospital mortality: Fine-Grey (against discharge alive, survival package) ###
   #Step 1 -- expand to the subdistribution risk set.  The IPCW goes in here as
   #the case weight, so the returned fgwt is censoring weight * IPCW.
   fg_dc  <- fg_expand(sample_df, "dc_fg_time", "dc_fg_cause", mv_rhs)
-
+  
   #Step 2 -- weighted Cox model on the expanded data.  This IS the Fine-Gray
   #model: exp(coef) is a subdistribution hazard ratio.  robust + cluster
   #because the expansion puts several correlated rows on each subject.
@@ -703,12 +757,12 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
                   weights = fgwt,
                   robust  = TRUE,
                   cluster = eb_clone)
-
+  
   #Cache the baseline cumulative hazard while the expanded frame is still in
   #scope; the curve helpers then need nothing but the fitted object.
   fit_dc$fg_basehaz <- basehaz(fit_dc, centered = FALSE)
   fit_dead_fg_surv <<- fit_dc
-
+  
   dead_FG_surv_30_con  <- standardized_contrast_FG(fit_dead_fg_surv, sample_df, 30)
   dead_FG_surv_90_con  <- standardized_contrast_FG(fit_dead_fg_surv, sample_df, 90)
   
@@ -821,6 +875,7 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
     icu_FG_timereg_30_N = icu_FG_timereg_30_con$frac_pred_N,
     icu_FG_timereg_30_E = icu_FG_timereg_30_con$frac_pred_E
   )
+  output_df <- cbind(output_df, discharge_con)
   
   #Calculate differences and odd-ratios
   output_df$VFD_diff <- output_df$VFD_E - output_df$VFD_N
@@ -857,7 +912,12 @@ model_outcomes <- function(sample_df, iteration_n, type_reg = "MV", trimmed_weig
   output_df$icu_FG_timereg_10_RR <- output_df$icu_FG_timereg_10_E / output_df$icu_FG_timereg_10_N
   output_df$icu_FG_timereg_30_diff <- output_df$icu_FG_timereg_30_E - output_df$icu_FG_timereg_30_N
   output_df$icu_FG_timereg_30_RR <- output_df$icu_FG_timereg_30_E / output_df$icu_FG_timereg_30_N
-    
+  for (key in dc_keys) {
+    col_E <- paste0("dc_", key, "_E"); col_N <- paste0("dc_", key, "_N")
+    output_df[[paste0("dc_", key, "_diff")]] <- output_df[[col_E]] - output_df[[col_N]]
+    output_df[[paste0("dc_", key, "_RR")]]   <- output_df[[col_E]] / output_df[[col_N]]
+  }
+  
   return(output_df)
 }
 
@@ -905,8 +965,8 @@ get_aj_curve <- function(treat, time_to, cause, weights, times) {
   
   #Weighted survival fit
   fit_aj <- survfit(Surv(time, cause, type="mstate") ~ treat,
-                     data = data, weights = weight, 
-                     conf.type="none", robust=TRUE)
+                    data = data, weights = weight, 
+                    conf.type="none", robust=TRUE)
   
   # extend = TRUE carries the last estimate forward past the final event
   # time instead of dropping those rows
@@ -957,6 +1017,26 @@ extract_zeroinfl_table <- function(fit, model_name) {
   bind_rows(out_count, out_zero)
 }
 
+#Multinomial model: one row per (destination, term). Estimates are log relative
+#risk ratios versus the reference destination (Home).
+extract_multinom_table <- function(fit, model_name) {
+  sm  <- summary(fit)
+  est <- sm$coefficients
+  se  <- sm$standard.errors
+  #A two level fit returns vectors rather than matrices
+  if (is.null(dim(est))) {
+    est <- matrix(est, nrow = 1, dimnames = list(fit$lev[2], names(est)))
+    se  <- matrix(se,  nrow = 1, dimnames = list(fit$lev[2], names(se)))
+  }
+  data.frame(model     = model_name,
+             component = rep(rownames(est), times = ncol(est)),
+             term      = rep(colnames(est), each = nrow(est)),
+             estimate  = as.vector(est),
+             se        = as.vector(se),
+             p_value   = as.vector(2 * pnorm(-abs(est / se))),
+             row.names = NULL, stringsAsFactors = FALSE)
+}
+
 # Adapted for the survival::finegray + coxph implementation.  summary.coxph
 # returns a plain coefficient matrix; with robust = TRUE it carries both the
 # model-based and the cluster-robust standard error and the robust one is used
@@ -969,7 +1049,7 @@ extract_finegray_table <- function(fit, model_name) {
   sm     <- summary(fit)$coefficients
   se_col <- if ("robust se" %in% colnames(sm)) "robust se" else "se(coef)"
   p_col  <- grep("^Pr\\(", colnames(sm), value = TRUE)[1]
-
+  
   main <- data.frame(
     model     = model_name,
     component = "main",
@@ -1000,7 +1080,7 @@ extract_finegray_table <- function(fit, model_name) {
     df        = z[, "df"],
     row.names = NULL, stringsAsFactors = FALSE
   )
-
+  
   rbind(main, ph)
 }
 
@@ -1096,6 +1176,7 @@ sumarize_regressions <- function (contrast_rows, file_name_in) {
   tab_dead_hosp<- extract_glm_table(fit_dead_hosp,     "is_dead_hosp")
   tab_dead_30  <- extract_glm_table(fit_dead_30,       "is_dead_30")
   tab_dead_365 <- extract_glm_table(fit_dead_365,      "is_dead_365")
+  tab_discharge <- extract_multinom_table(fit_discharge, "discharge_category")
   tab_dead_fg_surv <- extract_finegray_table(fit_dead_fg_surv, "dead_fg_surv")
   tab_dead_fg_icuint <- extract_finegray_table(fit_dead_fg_icuint, "dead_fg_icuint")
   tab_dead_fg_timereg <- extract_finegray_table_timereg(fit_dead_fg_timereg, "dead_fg_timereg")
@@ -1110,6 +1191,7 @@ sumarize_regressions <- function (contrast_rows, file_name_in) {
   addWorksheet(wb, "Hosp");            writeData(wb, "Hosp",             tab_dead_hosp)
   addWorksheet(wb, "30Day");           writeData(wb, "30Day",            tab_dead_30)
   addWorksheet(wb, "1Year");           writeData(wb, "1Year",            tab_dead_365)
+  addWorksheet(wb, "Discharge");       writeData(wb, "Discharge",        tab_discharge)
   addWorksheet(wb, "hosp_fg_survival"); writeData(wb, "hosp_fg_survival", tab_dead_fg_surv)
   addWorksheet(wb, "hosp_fg_icuint"); writeData(wb, "hosp_fg_icuint", tab_dead_fg_icuint)
   addWorksheet(wb, "hosp_fg_timereg"); writeData(wb, "hosp_fg_timereg", tab_dead_fg_timereg)
@@ -1148,14 +1230,14 @@ bootstrap_all <- function(boot_in_df) {
   # ---- Bootstrap curves for confidence bands ----
   #FG curves
   curve_boot_dc_surv_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
-                      dimnames = list(NULL, NULL, c("E", "N")))
+                                       dimnames = list(NULL, NULL, c("E", "N")))
   curve_boot_dc_surv_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
-                                  dimnames = list(NULL, NULL, c("E", "N")))
+                                      dimnames = list(NULL, NULL, c("E", "N")))
   
   curve_boot_dc_icuint_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
-                                       dimnames = list(NULL, NULL, c("E", "N")))
+                                         dimnames = list(NULL, NULL, c("E", "N")))
   curve_boot_dc_icuint_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
-                                      dimnames = list(NULL, NULL, c("E", "N")))
+                                        dimnames = list(NULL, NULL, c("E", "N")))
   
   curve_boot_dc_timereg_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
                                           dimnames = list(NULL, NULL, c("E", "N")))
@@ -1163,14 +1245,14 @@ bootstrap_all <- function(boot_in_df) {
                                          dimnames = list(NULL, NULL, c("E", "N")))
   
   curve_boot_icu_surv_original <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
-                                  dimnames = list(NULL, NULL, c("E", "N")))
+                                        dimnames = list(NULL, NULL, c("E", "N")))
   curve_boot_icu_surv_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
-                                 dimnames = list(NULL, NULL, c("E", "N")))
+                                       dimnames = list(NULL, NULL, c("E", "N")))
   
   curve_boot_icu_icuint_original <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
-                                        dimnames = list(NULL, NULL, c("E", "N")))
+                                          dimnames = list(NULL, NULL, c("E", "N")))
   curve_boot_icu_icuint_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
-                                       dimnames = list(NULL, NULL, c("E", "N")))
+                                         dimnames = list(NULL, NULL, c("E", "N")))
   
   curve_boot_icu_timereg_original <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
                                            dimnames = list(NULL, NULL, c("E", "N")))
@@ -1179,20 +1261,20 @@ bootstrap_all <- function(boot_in_df) {
   
   #AJ curves
   curve_boot_aj_dc_original <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
-                                  dimnames = list(NULL, NULL, c("E", "N")))
+                                     dimnames = list(NULL, NULL, c("E", "N")))
   curve_boot_aj_dc_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_dc), 2),
-                                 dimnames = list(NULL, NULL, c("E", "N")))
+                                    dimnames = list(NULL, NULL, c("E", "N")))
   
   curve_boot_aj_icu_original <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
-                                   dimnames = list(NULL, NULL, c("E", "N")))
+                                      dimnames = list(NULL, NULL, c("E", "N")))
   curve_boot_aj_icu_trimmed <- array(NA_real_, dim = c(resample_N, length(time_grid_icu), 2),
-                                  dimnames = list(NULL, NULL, c("E", "N")))
+                                     dimnames = list(NULL, NULL, c("E", "N")))
   
   
   #Create an outcomes data frame for bootstrapping
   out_boot_df <- data.frame()
   regression_failure_count <- 0
-
+  
   for (sample_i in 1:resample_N) {
     sample_df <- bootstrap_sample(boot_in_df)
     sample_df <- clone_and_weight(sample_df)
@@ -1203,21 +1285,21 @@ bootstrap_all <- function(boot_in_df) {
     ####### original - simple
     regression_failure <- tryCatch({
       sample_boot_df <- rbind(sample_boot_df,
-                           model_outcomes(sample_df,sample_i,
-                                          type_reg = "simple",
-                                          trimmed_weights = FALSE))
+                              model_outcomes(sample_df,sample_i,
+                                             type_reg = "simple",
+                                             trimmed_weights = FALSE))
       ####### trimmed - simple
       sample_boot_df <- rbind(sample_boot_df,
-                           model_outcomes(sample_df,sample_i,
-                                          type_reg = "simple",
-                                          trimmed_weights = TRUE))
+                              model_outcomes(sample_df,sample_i,
+                                             type_reg = "simple",
+                                             trimmed_weights = TRUE))
       
-  
+      
       ####### original - MV (with curves)
       sample_boot_df <- rbind(sample_boot_df,
-                           model_outcomes(sample_df,sample_i,
-                                          type_reg = "MV",
-                                          trimmed_weights = FALSE))
+                              model_outcomes(sample_df,sample_i,
+                                             type_reg = "MV",
+                                             trimmed_weights = FALSE))
       
       curve_b <- get_marginal_curve(fit_dead_fg_surv, sample_df, time_grid_dc)
       curve_boot_dc_surv_original[sample_i,,"E"] <- curve_b$pred_E
@@ -1241,9 +1323,9 @@ bootstrap_all <- function(boot_in_df) {
       
       ####### trimmed - MV (with curves)
       sample_boot_df <- rbind(sample_boot_df,
-                           model_outcomes(sample_df,sample_i,
-                                          type_reg = "MV",
-                                          trimmed_weights = TRUE))
+                              model_outcomes(sample_df,sample_i,
+                                             type_reg = "MV",
+                                             trimmed_weights = TRUE))
       
       curve_b <- get_marginal_curve(fit_dead_fg_surv, sample_df,
                                     time_grid_dc, trimmed_weights = TRUE)
@@ -1477,25 +1559,25 @@ run_pipeline <- function(pipe_in_df,label_in) {
   
   #Plot weighted mortality AJ curves (no regression)
   curve_prime_aj_dc_original <- get_aj_curve(prime_df$clone,
-                                       prime_df$dc_fg_time,
-                                       prime_df$dc_fg_cause,
-                                       prime_df$IPCW,
-                                       time_grid_dc)
+                                             prime_df$dc_fg_time,
+                                             prime_df$dc_fg_cause,
+                                             prime_df$IPCW,
+                                             time_grid_dc)
   curve_prime_aj_dc_trimmed <- get_aj_curve(prime_df$clone,
-                                       prime_df$dc_fg_time,
-                                       prime_df$dc_fg_cause,
-                                       prime_df$IPCW_trim,
-                                       time_grid_dc)
+                                            prime_df$dc_fg_time,
+                                            prime_df$dc_fg_cause,
+                                            prime_df$IPCW_trim,
+                                            time_grid_dc)
   curve_prime_aj_icu_original <- get_aj_curve(prime_df$clone,
-                                       prime_df$icu_fg_time,
-                                       prime_df$icu_fg_cause,
-                                       prime_df$IPCW,
-                                       time_grid_icu)
+                                              prime_df$icu_fg_time,
+                                              prime_df$icu_fg_cause,
+                                              prime_df$IPCW,
+                                              time_grid_icu)
   curve_prime_aj_icu_trimmed <- get_aj_curve(prime_df$clone,
-                                      prime_df$icu_fg_time,
-                                      prime_df$icu_fg_cause,
-                                      prime_df$IPCW_trim,
-                                      time_grid_icu)
+                                             prime_df$icu_fg_time,
+                                             prime_df$icu_fg_cause,
+                                             prime_df$IPCW_trim,
+                                             time_grid_icu)
   
   #Run the four outcomes types on the primary data.
   #For each outcome save the regression results and the curves (MV only)
@@ -1503,7 +1585,7 @@ run_pipeline <- function(pipe_in_df,label_in) {
   #-------original / simple
   print(paste0(label_in,": Primary Data Outcome Models"))
   outcome_now <- model_outcomes(prime_df, 0, type_reg = "simple",
-                               trimmed_weights = FALSE)
+                                trimmed_weights = FALSE)
   sumarize_regressions(outcome_now,
                        make_filename("regression_results",label_in,
                                      trim_status="original",
@@ -1545,15 +1627,15 @@ run_pipeline <- function(pipe_in_df,label_in) {
                                      model_type = "MV",
                                      ext="xlsx"))
   curve_prime_dc_surv_trimmed <- get_marginal_curve(fit_dead_fg_surv, prime_df,
-                                               time_grid_dc, trimmed_weights = TRUE)
-  curve_prime_dc_icuint_trimmed <- get_marginal_curve(fit_dead_fg_icuint, prime_df,
                                                     time_grid_dc, trimmed_weights = TRUE)
+  curve_prime_dc_icuint_trimmed <- get_marginal_curve(fit_dead_fg_icuint, prime_df,
+                                                      time_grid_dc, trimmed_weights = TRUE)
   curve_prime_dc_timereg_trimmed <- get_marginal_curve(fit_dead_fg_timereg, prime_df,
                                                        time_grid_dc, trimmed_weights = TRUE, use_timereg=TRUE)
   curve_prime_icu_surv_trimmed <- get_marginal_curve(fit_icu_fg_surv, prime_df,
-                                                time_grid_icu, trimmed_weights = TRUE)
-  curve_prime_icu_icuint_trimmed <- get_marginal_curve(fit_icu_fg_icuint, prime_df,
                                                      time_grid_icu, trimmed_weights = TRUE)
+  curve_prime_icu_icuint_trimmed <- get_marginal_curve(fit_icu_fg_icuint, prime_df,
+                                                       time_grid_icu, trimmed_weights = TRUE)
   curve_prime_icu_timereg_trimmed <- get_marginal_curve(fit_icu_fg_timereg, prime_df,
                                                         time_grid_icu, trimmed_weights = TRUE, use_timereg=TRUE)
   
@@ -1716,18 +1798,26 @@ run_pipeline <- function(pipe_in_df,label_in) {
 run_pipeline(bin_df,"ALL")
 
 # =============================================================================
-# 13.  SUB GROUP ANALYSIS
+# 13.  SENSITIVITY ANALYSES
+# Each uses its own label so the primary ("ALL") output files are not overwritten.
 # =============================================================================
 
-if (run_sub_group) { 
-  bin_65 <- bin_df %>% filter( (age >= 65) & (age < 75))
-  run_pipeline(bin_65,"65")
+if (run_sensitivity) {
+  #---- Worst values as the time-varying covariates
+  #The weighting models and complete-case filter read tv_vars / all_covars
+  #globally, so swap them for this run and restore them afterwards.
+  tv_vars_primary <- tv_vars
+  tv_vars    <- tv_vars_worst
+  all_covars <- c(base_vars, tv_vars)
+  run_pipeline(bin_df, "worst_values")
+  tv_vars    <- tv_vars_primary
+  all_covars <- c(base_vars, tv_vars)
   
-  bin_75 <- bin_df %>% filter( (age >= 75) & (age < 85))
-  run_pipeline(bin_75,"75")
-  
-  bin_85 <- bin_df %>% filter(age >= 85)
-  run_pipeline(bin_85,"85")
+  #---- First admission per patient only
+  bin_first <- bin_df %>% filter(admission_index == 1)
+  print(paste("First admission only: kept", length(unique(bin_first$encounter_block)),
+              "of", length(unique(bin_df$encounter_block)), "encounter blocks."))
+  run_pipeline(bin_first, "first_admission")
 }
 
 # =============================================================================

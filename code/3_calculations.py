@@ -100,7 +100,7 @@ def compute_consensus_flags(df):
     # Derive helper columns
     df['recorded_hour'] = df['window_start_dttm'].dt.hour
     df['is_weekday'] = df['window_start_dttm'].dt.weekday < 5
-    
+
     # --- RED flags ---
     df['red_resp_spo2_flag'] = ((df['spo2_min'] < 90) | df['spo2_min'].isna()).astype("Int64")
     df['red_map_flag'] = ((df['map_mean'] < 65) | df['map_mean'].isna()).astype("Int64")
@@ -412,6 +412,10 @@ log('Calculated mean norepinephrine equivalents in the first 24-hours.')
 
 #For time bins
 time_bin.gather_time_bins(pressor_df[['encounter_block','time_bin','ne_calc']], 'ne_calc', agg_func='mean', fill_with=0)
+
+#For time bins (worst value), max of the hourly max NE equivalent dose.
+pressor_df['ne_calc'] = pressor_df['ne_calc_max']
+time_bin.gather_time_bins(pressor_df[['encounter_block','time_bin','ne_calc']], 'ne_calc', agg_func='max', fill_with=0)
 del pressor_df
 log('Calculated pmean norepinephrine equivalents use flag for time_bins.')
 
@@ -687,8 +691,8 @@ mapping = {
     "Group Home":"Home",
     "Against Medical Advice (AMA)": "Home",
     "Assisted Living": "Home",
-    "Hospice": "Hospice",
-    "Expired": "Expired",
+    "Hospice": "Hospice/Expired",
+    "Expired": "Hospice/Expired",
     "Skilled Nursing Facility (SNF)": "Rehabilitation",
     "Acute Inpatient Rehab Facility": "Rehabilitation",
     "Psychiatric Hospital": "Other",
@@ -714,6 +718,10 @@ log(block_df['discharge_category'].value_counts(dropna=False))
 log(f"To be excluded based on PT 24 hours prior to IMV: {sum(block_df['pt_pre24_IMV'])}")
 block_df = block_df[~block_df['pt_pre24_IMV']]
 time_bin.df = time_bin.df[time_bin.df['encounter_block'].isin(block_df['encounter_block'])]
+
+#Chronological index of each patient's admissions in the final cohort (1 = first admission), for sensitivity analysis.
+block_df['admission_index'] = block_df.groupby('patient_id')['admission_dttm'].rank(method='first').astype("Int64")
+log(f"Patients with more than one admission: {block_df.loc[block_df['admission_index'] > 1, 'patient_id'].nunique()}")
 
 
 # ## Save
