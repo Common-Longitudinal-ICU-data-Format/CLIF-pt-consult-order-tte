@@ -56,7 +56,7 @@ output_folder = os.path.join(work_dir,'output')
 with open(os.path.join(work_dir,'config','config.json'), 'r') as file:
     config = json.load(file)
 
-#MIMIC needs years are shifted so cannot be used for filteing.
+#MIMIC dates are shifted, so admission year is converted with the MIMIC anchor year before filtering.
 use_mimic = 'mimic' in config['site_name'].lower()
 
 #Admission year window, applied at every site so the pooled analysis covers one common era.
@@ -179,14 +179,24 @@ log(f"Number of linked hospitalization ids: {strobe_ab['B_before_stitching'] - s
 log("\n=== STEP B2: Admission year filter ===\n")
 
 co.hospitalization.df['admission_year'] = co.hospitalization.df['admission_dttm'].dt.year.astype("Int64")
+
+#MIMIC dates are shifted per patient, so convert to an estimated real year using the anchor year.
+if use_mimic:
+    log('Using MIMIC anchor year for admission year.')
+    _patient_mimic_df = helper.load_data("mimic","patients", folder='hosp', type='csv.gz')
+    _patient_mimic_df['patient_id'] = _patient_mimic_df['subject_id'].astype(str)
+    _patient_mimic_df = _patient_mimic_df.drop_duplicates(subset='patient_id').set_index('patient_id')
+    #Admission Year (based on estimate from anchor year). Convert anchor year group to an integer.
+    _anchor_year_group = _patient_mimic_df["anchor_year_group"].str.slice(0, 4).astype("Int64") + 1
+    _year_shift = _anchor_year_group - _patient_mimic_df["anchor_year"].astype("Int64")
+    co.hospitalization.df['admission_year'] = co.hospitalization.df['admission_year'] + co.hospitalization.df['patient_id'].astype(str).map(_year_shift)
+    del _patient_mimic_df, _anchor_year_group, _year_shift
+
+log(f"Hospitalizations with admission year missing: {co.hospitalization.df['admission_year'].isna().sum()}")
 log(f"Mininum year before filtering: {co.hospitalization.df['admission_year'].min()}")
 log(f"Maximum year before filtering: {co.hospitalization.df['admission_year'].max()}")
 
-if use_mimic:
-    ##No year filtering for MIMIC, include all.
-    _eb_inyear = co.hospitalization.df['encounter_block'].drop_duplicates()
-else:
-    _eb_inyear = co.hospitalization.df[ co.hospitalization.df['admission_year'].between(year_min, year_max) ]['encounter_block'].drop_duplicates()
+_eb_inyear = co.hospitalization.df[ co.hospitalization.df['admission_year'].between(year_min, year_max).fillna(False) ]['encounter_block'].drop_duplicates()
 
 co.hospitalization.df = co.hospitalization.df[ co.hospitalization.df['encounter_block'].isin(_eb_inyear) ]
 
@@ -329,10 +339,10 @@ def impute_fio2_from_nasal_cannula_flow(df):
     """
     Impute missing FiO2 values for nasal cannula based on oxygen flow rate (LPM)
     using the standard clinical conversion table.
-    
+
     Parameters:
     df (pd.DataFrame): DataFrame with device_category, lpm_set, and fio2_set columns
-    
+
     Returns:
     pd.DataFrame: DataFrame with updated fio2_set values
     """
@@ -349,7 +359,7 @@ def impute_fio2_from_nasal_cannula_flow(df):
         9: 0.56,   # 9 L/min → 56%
         10: 0.60   # 10 L/min → 60%
     }
-    
+
     # Create mask for rows that need imputation
     nasal_cannula_mask = (
         (df['device_category'] == 'nasal cannula') &
@@ -359,15 +369,15 @@ def impute_fio2_from_nasal_cannula_flow(df):
         (df['lpm_set'] <= 10) &    # Within lookup range
         (df['lpm_set'] == df['lpm_set'].round())  # Integer values only
     )
-    
+
     # Apply the lookup for eligible rows
     df.loc[nasal_cannula_mask, 'fio2_set'] = df.loc[nasal_cannula_mask, 'lpm_set'].map(fio2_lookup)
-    
+
     # Report what was imputed
     n_imputed = nasal_cannula_mask.sum()
     if n_imputed > 0:
         print(f"[OK] Imputed FiO2 for {n_imputed:,} nasal cannula rows using LPM lookup table")
-        
+
         # Show breakdown by LPM
         imputed_breakdown = df[nasal_cannula_mask]['lpm_set'].value_counts().sort_index()
         print("   Breakdown by LPM:")
@@ -376,7 +386,7 @@ def impute_fio2_from_nasal_cannula_flow(df):
             print(f"   {lpm}L/min → {fio2_pct}%: {count:,} rows")
     else:
         print(" No nasal cannula rows needed FiO2 imputation")
-    
+
     return df
 
 rs_waterfall = impute_fio2_from_nasal_cannula_flow(rs_waterfall)
@@ -428,7 +438,7 @@ co.adt.df = co.adt.df[co.adt.df['encounter_block'].isin(_eb_list)]
 co.encounter_mapping = co.encounter_mapping[co.encounter_mapping['encounter_block'].isin(_eb_list)]
 co.patient.df = co.patient.df[co.patient.df['patient_id'].isin(co.hospitalization.df['patient_id'])]
 rs_waterfall = rs_waterfall[rs_waterfall['encounter_block'].isin(_eb_list)]
-    
+
 log(f"01_cohort: ADULT and IMV for >0 hours : Block Length: {len(block_df)}, Encounter Blocks {block_df['encounter_block'].nunique()}")
 
 
@@ -481,7 +491,7 @@ imv_episodes = (
 
 log(f"Total intubation episodes found: {imv_episodes.shape[0]}")
 log(f"Unique encounter blocks with >0 intubations episodes: {imv_episodes['encounter_block'].nunique()}")
-    
+
 #del _resp_df, runs
 
 
@@ -612,14 +622,15 @@ _hosp_df = _hosp_df.groupby('encounter_block').agg({'admission_dttm':'min',
                                                     'admission_type_category':'first',
                                                     'age':'min',
                                                     'discharge_dttm':'max',
-                                                    'discharge_category':'last'}).reset_index()
+                                                    'discharge_category':'last',
+                                                    'admission_year':'min'}).reset_index()
 #Merge back with block_data
 block_df = pd.merge(block_df,
                     _hosp_df,
                     on='encounter_block',
                     how='left')
 
-_columns_of_interest = ['encounter_block','admission_dttm','age','admission_type_category','discharge_dttm','discharge_category']
+_columns_of_interest = ['encounter_block','admission_dttm','admission_year','age','admission_type_category','discharge_dttm','discharge_category']
 for _col in _columns_of_interest:
     log(f"Blocks with {_col} missing: {sum(block_df[_col].isna())}")
 
@@ -807,7 +818,7 @@ for earlier, later, description in chronological_checks:
     mask = block_df[earlier].notna() & block_df[later].notna()
     violations = (block_df.loc[mask, later] < block_df.loc[mask, earlier]).sum()
     log(f"Encounter blocks where {description}: {violations}")
-    
+
     if "[SEVERE]" in description:
         severe_violation_mask |= (mask & (block_df[later] < block_df[earlier]))
 

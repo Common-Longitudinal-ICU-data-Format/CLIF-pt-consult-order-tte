@@ -173,7 +173,7 @@ my_cols         <- column_order$name
 rownames(column_order) <- column_order$name   # lookup by column name
 
 block_df_final <- block_df_scored[, my_cols]
-my_cols <- my_cols[my_cols != "patient_id"] #Remove patient id since it will not be analyzed below.
+my_cols <- my_cols[!(my_cols %in% c("patient_id", "admission_index"))] #Remove patient id and adimission index since it will not be analyzed below.
 
 final_path <- file.path(output_folder, "intermediate", "block_df_final.parquet")
 write_parquet(block_df_final, final_path)

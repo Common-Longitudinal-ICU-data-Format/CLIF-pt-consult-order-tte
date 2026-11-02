@@ -1,6 +1,6 @@
 name,description,covariate,outcome,other
 encounter_block,Identifier,0,0,identifier
-patient_id,0,0,patient identifier
+patient_id,Patient Identifier,0,0,identifier
 age,Age (years),1,0,
 sex_category,Sex,1,0,
 race_category,Race,1,0,
@@ -8,6 +8,7 @@ ethnicity_category,Ethnicity,1,0,
 weight_kg,Weight (kg),1,0,
 language_category,Language,1,0,
 admission_year,Year of Admission,0,0,
+admission_index,Chronological Admission Index per Patient,0,0,identifier
 elixhauser,Elixhauser Comorbidity Index,0,0,
 admission_type_category,Admission Type Category,0,0,
 adm_to_imv_hours,Length of Stay at the Time of IMV Initiation (hours),0,0,
@@ -43,7 +44,7 @@ intubation_count,Total intubation count during hospitalization,0,0,
 reintubation,Reintubation Rate,0,0,
 adm_to_discharge_days,Overall Hospital Length of Stay (days),0,0,
 imv_to_discharge_days,Post-IMV Hospital Length of Stay (days),0,1,
-discharge_category,Discharge Disposition,0,0,
+discharge_category,Discharge Disposition,0,1,multinomial
 icu_los_days,ICU Length of Stay (days),0,1,poisson
 icu_los_first_days,First ICU Length of Stay from IMV (days),0,1,FG
 imv_to_death_days,Post-IMV Mortality (days),0,1,
