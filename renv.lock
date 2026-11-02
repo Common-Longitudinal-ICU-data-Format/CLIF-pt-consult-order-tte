@@ -121,7 +121,7 @@
     },
     "arrow": {
       "Package": "arrow",
-      "Version": "25.0.1",
+      "Version": "26.0.0",
       "Source": "Repository",
       "Repository": "CRAN",
       "Requirements": [
@@ -139,7 +139,7 @@
         "utils",
         "vctrs"
       ],
-      "Hash": "b029a47a9e75c4bdddfbaf6229cde94c"
+      "Hash": "acc869bd96831e23a59076f5240b7acc"
     },
     "askpass": {
       "Package": "askpass",
@@ -1035,6 +1035,18 @@
         "vctrs"
       ],
       "Hash": "4f50122dc256b1b6996a4703fecea821"
+    },
+    "nnet": {
+      "Package": "nnet",
+      "Version": "7.3-21",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "stats",
+        "utils"
+      ],
+      "Hash": "9e863471b4d928dc4075ed789b54ea54"
     },
     "numDeriv": {
       "Package": "numDeriv",

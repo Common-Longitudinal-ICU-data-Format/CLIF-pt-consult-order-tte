@@ -13,7 +13,7 @@ setwd(project_dir)
 packages_to_install <- c(
   "tidyverse", "pscl", "ggplot2", "dplyr", "openxlsx", "smd",
   "tibble", "cobalt", "this.path", "glue", "data.table",
-  "scales", "arrow", "comorbidity", "survival","timereg"
+  "scales", "arrow", "comorbidity", "survival","timereg", "nnet"
 )
 
 # ---- Repos ------------------------------------------------------------------
