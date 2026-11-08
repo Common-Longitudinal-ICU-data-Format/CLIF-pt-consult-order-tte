@@ -12,7 +12,7 @@
 
 # ## Setup
 
-# In[ ]:
+# In[1]:
 
 
 ### Import
@@ -65,7 +65,7 @@ year_min = int(config.get('year_min', 2018))
 year_max = int(config.get('year_max', 2024))
 
 
-# In[ ]:
+# In[2]:
 
 
 #output_folders
@@ -121,7 +121,7 @@ log(f"=== CLIF Pipeline 01: Cohort Identification ===")
 log(f"Site: {config['site_name']}")
 
 
-# In[ ]:
+# In[3]:
 
 
 #Load Clif Tables
@@ -134,7 +134,7 @@ log(f"Total Number of unique encounters in the hospitalization table: {co.hospit
 # ## Cohort Identification 
 # ### (A) Age Filter
 
-# In[ ]:
+# In[4]:
 
 
 log("\n=== STEP A: Filter by age ===\n")
@@ -153,7 +153,7 @@ log("Missing values in discharge_dttm:", co.hospitalization.df['discharge_dttm']
 
 # ### (B) Stitch Hospitalizations
 
-# In[ ]:
+# In[5]:
 
 
 log("\n=== STEP B: Stitch encounters ===\n")
@@ -173,7 +173,7 @@ log(f"Number of linked hospitalization ids: {strobe_ab['B_before_stitching'] - s
 
 # ### (B2) Year Filter
 
-# In[ ]:
+# In[6]:
 
 
 log("\n=== STEP B2: Admission year filter ===\n")
@@ -216,7 +216,7 @@ del _eb_inyear
 # - Identify potential extubations based on `lpm_set` not being empty.
 # - Impute missing FiO2 values
 
-# In[ ]:
+# In[7]:
 
 
 log("\n=== STEP C: Load & process respiratory support => Apply Waterfall & Identify IMV usage ===\n")
@@ -252,7 +252,13 @@ log(f"Number of rows in respiratory support waterfall: {rs_waterfall.shape[0]}")
 rs_waterfall = helper.convert_datetime_columns(rs_waterfall)
 
 
-# In[ ]:
+# In[11]:
+
+
+rs_waterfall['tracheostomy'] = (rs_waterfall['tracheostomy'].isin(["True",'true',1])).astype("Int64")
+
+
+# In[12]:
 
 
 #Describe extend of missing device category problem
@@ -291,7 +297,7 @@ log(extubations_describe(rs_waterfall))
 #NOTE: The applied rules below are hiarcheal, meaning as one rule is applied these rows are removed from requiring a fix.
 
 #Apply trach rule
-trach_rule = fix_mask & (rs_waterfall['tracheostomy'] == 'True')
+trach_rule = fix_mask & (rs_waterfall['tracheostomy'] == 1)
 rs_waterfall.loc[trach_rule, 'device_category'] = 'trach collar'
 fix_mask = fix_mask & ~trach_rule #Remove from list of needed to be fixed
 log(f"Implied trach collar based on tracheostomy flag {sum(trach_rule)}")
@@ -328,7 +334,7 @@ log("POST FIX EXTUBATION COUNTER")
 log(extubations_describe(rs_waterfall))
 
 
-# In[ ]:
+# In[13]:
 
 
 #Impute FIO2
@@ -339,10 +345,10 @@ def impute_fio2_from_nasal_cannula_flow(df):
     """
     Impute missing FiO2 values for nasal cannula based on oxygen flow rate (LPM)
     using the standard clinical conversion table.
-
+    
     Parameters:
     df (pd.DataFrame): DataFrame with device_category, lpm_set, and fio2_set columns
-
+    
     Returns:
     pd.DataFrame: DataFrame with updated fio2_set values
     """
@@ -359,7 +365,7 @@ def impute_fio2_from_nasal_cannula_flow(df):
         9: 0.56,   # 9 L/min → 56%
         10: 0.60   # 10 L/min → 60%
     }
-
+    
     # Create mask for rows that need imputation
     nasal_cannula_mask = (
         (df['device_category'] == 'nasal cannula') &
@@ -369,15 +375,15 @@ def impute_fio2_from_nasal_cannula_flow(df):
         (df['lpm_set'] <= 10) &    # Within lookup range
         (df['lpm_set'] == df['lpm_set'].round())  # Integer values only
     )
-
+    
     # Apply the lookup for eligible rows
     df.loc[nasal_cannula_mask, 'fio2_set'] = df.loc[nasal_cannula_mask, 'lpm_set'].map(fio2_lookup)
-
+    
     # Report what was imputed
     n_imputed = nasal_cannula_mask.sum()
     if n_imputed > 0:
         print(f"[OK] Imputed FiO2 for {n_imputed:,} nasal cannula rows using LPM lookup table")
-
+        
         # Show breakdown by LPM
         imputed_breakdown = df[nasal_cannula_mask]['lpm_set'].value_counts().sort_index()
         print("   Breakdown by LPM:")
@@ -386,7 +392,7 @@ def impute_fio2_from_nasal_cannula_flow(df):
             print(f"   {lpm}L/min → {fio2_pct}%: {count:,} rows")
     else:
         print(" No nasal cannula rows needed FiO2 imputation")
-
+    
     return df
 
 rs_waterfall = impute_fio2_from_nasal_cannula_flow(rs_waterfall)
@@ -398,7 +404,7 @@ log("Missing values in recorded_dttm:", rs_waterfall['recorded_dttm'].isna().sum
 
 # ### (D) Determine ventilation times (start/end) at encounter block level
 
-# In[ ]:
+# In[14]:
 
 
 log("\n=== STEP D: Determine ventilation times (start/end) at encounter block level ===\n")
@@ -422,7 +428,7 @@ strobe_d['D_blocks_with_same_vent_start_end'] = _block_same_vent['encounter_bloc
 log(f"Unique encounter blocks with valid IMV start/end: {strobe_d['D_blocks_with_valid_vent']}")
 
 
-# In[ ]:
+# In[15]:
 
 
 #Quick aside the start the block_df data frame and to filter our the CO data.
@@ -438,13 +444,13 @@ co.adt.df = co.adt.df[co.adt.df['encounter_block'].isin(_eb_list)]
 co.encounter_mapping = co.encounter_mapping[co.encounter_mapping['encounter_block'].isin(_eb_list)]
 co.patient.df = co.patient.df[co.patient.df['patient_id'].isin(co.hospitalization.df['patient_id'])]
 rs_waterfall = rs_waterfall[rs_waterfall['encounter_block'].isin(_eb_list)]
-
+    
 log(f"01_cohort: ADULT and IMV for >0 hours : Block Length: {len(block_df)}, Encounter Blocks {block_df['encounter_block'].nunique()}")
 
 
 # ### (E) Intubation episodes identification
 
-# In[ ]:
+# In[16]:
 
 
 log("\n=== STEP E: Intubation episodes identification ===\n")
@@ -491,11 +497,11 @@ imv_episodes = (
 
 log(f"Total intubation episodes found: {imv_episodes.shape[0]}")
 log(f"Unique encounter blocks with >0 intubations episodes: {imv_episodes['encounter_block'].nunique()}")
-
+    
 #del _resp_df, runs
 
 
-# In[ ]:
+# In[17]:
 
 
 #Merge with the overall block vent initiation
@@ -523,7 +529,7 @@ del imv_episodes
 
 # ### (F) Exclusion Criteria
 
-# In[ ]:
+# In[18]:
 
 
 # Exclude blocks with imv for less than 4 hours
@@ -537,7 +543,7 @@ log(f"Unique encounter blocks with IMV >=4 hours: {strobe_excl['F_blocks_with_ve
 log(f"Excluded {len(_blocks_under_4)} encounter blocks with <4 vent hours in first 72 hours of intubation.\n")
 
 # Exclude blocks with trach at the time of intubation
-_blocks_with_trach_at_intubation = imv_hours_df['trach_at_start'].astype(int)
+_blocks_with_trach_at_intubation = imv_hours_df['trach_at_start'].fillna(0).astype(int)
 imv_hours_df = imv_hours_df[ _blocks_with_trach_at_intubation == 0 ]
 strobe_excl['F_final_blocks_with_trach_at_intubation'] = sum(_blocks_with_trach_at_intubation)
 strobe_excl['F_final_blocks_without_trach_at_intubation'] = imv_hours_df['encounter_block'].nunique()
@@ -551,7 +557,7 @@ del _blocks_under_4, _blocks_with_trach_at_intubation
 # - Apply filter as noted above
 # - Save progress so far including encounter stitching and cohort sample.
 
-# In[ ]:
+# In[19]:
 
 
 #Filter out from final cohort
@@ -593,7 +599,7 @@ log(f"01_cohort: FINAL COHORT: Block Length: {len(block_df)}, Encounter Blocks {
 
 # ### (A) Patient Data
 
-# In[ ]:
+# In[20]:
 
 
 _columns_of_interest = ['patient_id','race_category','ethnicity_category','sex_category','death_dttm','language_category']
@@ -610,7 +616,7 @@ for _col in _columns_of_interest:
 # 
 # Unfortunately the CLIF admission_type_category mapping from MIMIC-CLIF does not include whether or not the patient came as an OSH transfer. So we will need to get data direct from MIMIC to determine OSH transfers if desired.
 
-# In[ ]:
+# In[21]:
 
 
 _hosp_df = co.hospitalization.df.copy()
@@ -638,7 +644,7 @@ for _col in _columns_of_interest:
 # ### (C) ADT Data
 # - ICU in and out time.
 
-# In[ ]:
+# In[22]:
 
 
 #Merge with encounter block
@@ -662,7 +668,7 @@ merged_adt_df = merged_adt_df[merged_adt_df['out_dttm'] > merged_adt_df['block_v
 merged_adt_df = merged_adt_df.sort_values(['encounter_block','in_dttm'], ascending=True)
 
 
-# In[ ]:
+# In[23]:
 
 
 #ICU Type, In Time
@@ -732,7 +738,7 @@ log(block_df['ICU_type'].value_counts())
 # 
 # First and last vital
 
-# In[ ]:
+# In[24]:
 
 
 #Load vitals
@@ -761,7 +767,7 @@ del _vital_times_df
 
 # ### (E) Check conformity of time columns
 
-# In[ ]:
+# In[25]:
 
 
 # Define all chronological constraints as (earlier, later, description)
@@ -818,7 +824,7 @@ for earlier, later, description in chronological_checks:
     mask = block_df[earlier].notna() & block_df[later].notna()
     violations = (block_df.loc[mask, later] < block_df.loc[mask, earlier]).sum()
     log(f"Encounter blocks where {description}: {violations}")
-
+    
     if "[SEVERE]" in description:
         severe_violation_mask |= (mask & (block_df[later] < block_df[earlier]))
 
@@ -830,7 +836,7 @@ block_df = block_df[~severe_violation_mask].reset_index(drop=True)
 
 # ### (F) PT Consult Orders
 
-# In[ ]:
+# In[26]:
 
 
 #load (loading from output since key_icu_orders is not a defined table in CLIFpy and we just created it in the prior script
@@ -882,7 +888,7 @@ print(f"Unique Encounter Block: {block_df['encounter_block'].nunique()}")
 
 # ## Save Data
 
-# In[ ]:
+# In[27]:
 
 
 #Filter out from final cohort
@@ -902,7 +908,7 @@ log(f"01_cohort: AFTER DATA COLLECTION: Block Length: {len(block_df)}, Encounter
 
 # ## Flowchart
 
-# In[ ]:
+# In[28]:
 
 
 # Merge all strobe dicts

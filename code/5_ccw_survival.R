@@ -48,8 +48,8 @@ Sys.time()
 sessionInfo()
 
 #----- Options -----------------------------------------------------------------
-resample_N <- 5 #Effective bootstrapping resamples.
-#resample_N <- 500 #Effective bootstrapping resamples.
+#resample_N <- 5 #Effective bootstrapping resamples. (FOR TESTING)
+resample_N <- 500 #Effective bootstrapping resamples.
 run_sensitivity <- TRUE
 input_file_path <- file.path(output_folder, "intermediate",
                              "block_and_time_bins_for_stats.parquet")
@@ -144,10 +144,6 @@ out_vars <- c("vent_free_days","icu_los_days","is_dead_hosp","is_dead_30",
 
 #All covars, used to determine complete case analysis.
 all_covars <- c(base_vars, tv_vars)
-
-# # Combined covariates & columns needed for complete analysis of the CCW.
-# all_vars <- c("encounter_block","patient_id","time_bin","bin_start","bin_end","pt_order",
-#                 "pt_now","pt_post48_IMV",base_vars, tv_vars, out_vars)
 
 # Combined covariates & columns needed for complete analysis of the CCW.
 # Includes the sensitivity analysis variables so they are not dropped.

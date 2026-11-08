@@ -186,6 +186,21 @@ n_total <- sum(!is.na(block_df_final$encounter_block))
 n_early <- sum(block_df_final[[early_col]], na.rm = TRUE)
 n_not   <- n_total - n_early
 
+## ---- Safe SMD helper ---------------------------------------------------------
+safe_smd <- function(x, g) {
+  ok <- !is.na(x) & !is.na(g)
+  # Need at least 2 distinct values and both groups present
+  if (sum(ok) == 0 || length(unique(x[ok])) < 2 || length(unique(g[ok])) < 2) {
+    return(NA_real_)
+  }
+  tryCatch(
+    smd(x[ok], g[ok])$estimate[1],
+    error = function(e) NA_real_
+  )
+}
+
+fmt_smd <- function(v) if (is.na(v)) "N/A" else sprintf("%.3f", v)
+
 ## ---- Build table1.csv ------------------------------------------------------------
 table1_path <- file.path(output_folder, "final", "table1.csv")
 if (file.exists(table1_path)) { file.remove(table1_path) }
@@ -204,7 +219,7 @@ for (col in my_cols) {
 
   } else if ((is.character(col_vals) || is.factor(col_vals))) {
     
-    SMD_rslt <- smd(col_vals, block_df_final$early_PT, na.rm=TRUE)
+    SMD_rslt <- safe_smd(col_vals, block_df_final$early_PT)
     cat(sprintf("\n%s", lab), file = con)
     col_chr <- as.character(col_vals)
     cats <- unique(col_chr[!is.na(col_chr)])
@@ -217,7 +232,7 @@ for (col in my_cols) {
         cat(sprintf("\n,%s,%.1f%%,%.1f%%,%.1f%%", cc, cc_all, cc_early, cc_not), file = con)
       }
     }
-    cat(sprintf(", %.3f", SMD_rslt$estimate[1]), file = con)
+    cat(sprintf(", %s", fmt_smd(SMD_rslt)), file = con)
 
   } else if (is.logical(col_vals)) {
     
@@ -225,18 +240,18 @@ for (col in my_cols) {
       sub_df <- block_df_final[!is.na(col_vals), ]
       flag <- ifelse(sub_df[[col]], "TRUE", "FALSE")
       tab  <- table(flag, sub_df$early_PT)
-      SMD_rslt <- smd(col_vals, block_df_final$early_PT, na.rm=TRUE)
+      SMD_rslt <- safe_smd(col_vals, block_df_final$early_PT)
       cc_all   <- 100 * sum(tab["TRUE", ]) / sum(!is.na(sub_df[[col]]))
       cc_early <- 100 * tab["TRUE", "early_PT"]    / sum(tab[, "early_PT"])
       cc_not   <- 100 * tab["TRUE", "no_early_PT"] / sum(tab[, "no_early_PT"])
-      cat(sprintf("\n%s,,%.2f%%,%.2f%%,%.2f%%,%.3f", lab, cc_all, cc_early, cc_not, SMD_rslt$estimate[1]), file = con)
+      cat(sprintf("\n%s,,%.2f%%,%.2f%%,%.2f%%,%s", lab, cc_all, cc_early, cc_not, fmt_smd(SMD_rslt)), file = con)
     } else {
       cat(sprintf("\n%s,,0.00%%,0.00%%,0.00%%,N/A", lab), file = con)
     }
 
   } else if (is.numeric(col_vals)) {
     
-    SMD_rslt <- smd(col_vals, block_df_final$early_PT, na.rm=TRUE)
+    SMD_rslt <- safe_smd(col_vals, block_df_final$early_PT)
     cc_all   <- col_vals[!is.na(col_vals)]
     cc_early <- col_vals[block_df_final[[early_col]]  & !is.na(block_df_final[[early_col]])]
     cc_early <- cc_early[!is.na(cc_early)]
@@ -252,7 +267,7 @@ for (col in my_cols) {
     cat(sprintf(",%.2f  (%.2f - %.2f)",
                 median(cc_not), unname(quantile(cc_not, 0.25)), unname(quantile(cc_not, 0.75))),
         file = con)
-    cat(sprintf(",%.3f", SMD_rslt$estimate[1]), file = con)
+    cat(sprintf(",%s", fmt_smd(SMD_rslt)), file = con)
 
   } else {
 

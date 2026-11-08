@@ -11,7 +11,7 @@
 
 # ## Setup
 
-# In[ ]:
+# In[26]:
 
 
 ### Import
@@ -65,7 +65,7 @@ time_bin = helper.time_bins(in_name='time_bin_step_2')
 hourly = helper.hourly_blocks(in_name='hourly_df_two')
 
 
-# In[ ]:
+# In[27]:
 
 
 _logger = logging.getLogger('clif_01')
@@ -93,14 +93,14 @@ log(f"Site: {config['site_name']}")
 # 
 # Uses hourly data frame built earlier along with algorithm by Kaveri. Original code seen here: [CLIF-eligibility-for-mobilization](https://github.com/Common-Longitudinal-ICU-data-Format/CLIF-eligibility-for-mobilization/blob/main/code/02_mobilization_analysis.py)
 
-# In[ ]:
+# In[28]:
 
 
 def compute_consensus_flags(df):
     # Derive helper columns
     df['recorded_hour'] = df['window_start_dttm'].dt.hour
     df['is_weekday'] = df['window_start_dttm'].dt.weekday < 5
-
+    
     # --- RED flags ---
     df['red_resp_spo2_flag'] = ((df['spo2_min'] < 90) | df['spo2_min'].isna()).astype("Int64")
     df['red_map_flag'] = ((df['map_mean'] < 65) | df['map_mean'].isna()).astype("Int64")
@@ -266,7 +266,7 @@ def compute_consensus_flags(df):
 hourly.df = compute_consensus_flags(hourly.df)
 
 
-# In[ ]:
+# In[29]:
 
 
 hourly.save(suffix='_w_mob')
@@ -275,7 +275,7 @@ hourly.df['time_diff'] = hourly.df['time_from_vent']
 hourly.df['time_bin'] = time_bin.classify_time_bin(hourly.df['time_diff'])
 
 
-# In[ ]:
+# In[30]:
 
 
 time_bin.df.head()
@@ -284,7 +284,7 @@ time_bin.df.head()
 # ## Time to mobilization
 # Use mobilization data to get a few variables.
 
-# In[ ]:
+# In[31]:
 
 
 yellow_df = hourly.df.rename(columns={'any_yellow_or_green_no_red_all_hours':'yellow'}).copy()
@@ -352,7 +352,7 @@ del grouped_yellow_df, yellow_df
 # ## Oversedation
 # Based on 'coma' which was defined by RASS < -2 in the second notebook.
 
-# In[ ]:
+# In[32]:
 
 
 coma_df = hourly.df[['encounter_block','time_diff','coma']].copy()
@@ -371,7 +371,7 @@ log('Calculated hours of oversedation.')
 
 # ## Pressor Data
 
-# In[ ]:
+# In[33]:
 
 
 #Pressor binary indicator
@@ -395,7 +395,7 @@ time_bin.gather_time_bins(pressor_df[['encounter_block','time_bin','pressor']], 
 log('Calculated pressor use flag for time_bins.')
 
 
-# In[ ]:
+# In[34]:
 
 
 #Pressor mean NE equivalent dose
@@ -422,7 +422,7 @@ log('Calculated pmean norepinephrine equivalents use flag for time_bins.')
 
 # ## Paralytics Data
 
-# In[ ]:
+# In[35]:
 
 
 #Paralytics indicator
@@ -450,7 +450,7 @@ del para_df
 
 # ## Ventilator Data
 
-# In[ ]:
+# In[36]:
 
 
 ###VENT FREE DAYS
@@ -511,7 +511,7 @@ hourly.df['vent'] = hourly.df['hourly_on_vent']
 time_bin.gather_time_bins(hourly.df[['encounter_block','time_bin','vent']], 'vent', agg_func='flag')
 
 
-# In[ ]:
+# In[37]:
 
 
 del intubation_count_df
@@ -519,7 +519,7 @@ del last_vent_df
 del vent_df
 
 
-# In[ ]:
+# In[38]:
 
 
 #SAVING POINT
@@ -530,7 +530,7 @@ del path
 
 # ## Close Time Bins Data Set
 
-# In[ ]:
+# In[39]:
 
 
 #Censor out dead data
@@ -545,7 +545,7 @@ del path
 
 # ## Date Time Calculations
 
-# In[ ]:
+# In[40]:
 
 
 # Add Hospital mortality: TRUE if Death_dttm < discharge_dttm or (discharge category is hospice or dead) 
@@ -594,13 +594,14 @@ block_df['is_dead_365'] = (block_df['death_dttm'] - block_df['block_vent_start_d
 
 # ### Language
 
-# In[ ]:
+# In[41]:
 
 
 log("LANGUAGE PRE:")
+block_df['language_category'] = block_df['language_category'].str.lower()
 log(block_df['language_category'].value_counts(dropna=False))
-keep = {"English","Spanish"}
-missing = {'Unknown or NA'}
+keep = {"english","spanish"}
+missing = {'unknown or na'}
 set_mask = block_df['language_category'].notna() & (~block_df['language_category'].isin(missing))
 block_df["language_category"] = np.where(block_df["language_category"].isin(keep), block_df["language_category"], "Other")
 block_df["language_category"] = np.where(set_mask, block_df['language_category'], None)
@@ -610,12 +611,13 @@ log(block_df['language_category'].value_counts(dropna=False)) #log results
 
 # ### Race
 
-# In[ ]:
+# In[42]:
 
 
 log("RACE PRE:")
+block_df['race_category'] = block_df['race_category'].str.lower()
 log(block_df['race_category'].value_counts(dropna=False))
-keep = {"White", "Black or African American"}
+keep = {"white", "black or african american"}
 set_mask = block_df['race_category'].notna() & (~block_df['race_category'].eq("Unknown"))
 block_df["race_category"] = np.where(block_df["race_category"].isin(keep), block_df["race_category"], "Other")
 block_df["race_category"] = np.where(set_mask, block_df['race_category'], None)
@@ -625,7 +627,7 @@ log(block_df['race_category'].value_counts(dropna=False)) #log results
 
 # ### Ethnicity
 
-# In[ ]:
+# In[43]:
 
 
 #This just converts "Unknown" to None for better missingness tracking.
@@ -635,10 +637,11 @@ block_df["ethnicity_category"] = np.where(set_mask, block_df['ethnicity_category
 
 # ### ICU Type
 
-# In[ ]:
+# In[44]:
 
 
 log("ICU TYPE PRE:")
+block_df['ICU_type'] = block_df['ICU_type'].str.lower()
 log(block_df['ICU_type'].value_counts(dropna=False))
 mapping = {
     "general_icu": "Medical ICU",
@@ -661,10 +664,11 @@ log(block_df['ICU_type'].value_counts(dropna=False))
 
 # ### Admission Category
 
-# In[ ]:
+# In[45]:
 
 
 log("ADMISSION PRE:")
+block_df['admission_type_category'] = block_df['admission_type_category'].str.lower()
 log(block_df['admission_type_category'].value_counts(dropna=False))
 mapping = {
     "ed": "Emergency Department",
@@ -681,27 +685,28 @@ log(block_df['admission_type_category'].value_counts(dropna=False))
 
 # ### Discharge Category
 
-# In[ ]:
+# In[46]:
 
 
 log("DISCHARGE PRE:")
+block_df['discharge_category'] = block_df['discharge_category'].str.lower()
 log(block_df['discharge_category'].value_counts(dropna=False))
 mapping = {
-    "Home": "Home",
-    "Group Home":"Home",
-    "Against Medical Advice (AMA)": "Home",
-    "Assisted Living": "Home",
-    "Hospice": "Hospice/Expired",
-    "Expired": "Hospice/Expired",
-    "Skilled Nursing Facility (SNF)": "Rehabilitation",
-    "Acute Inpatient Rehab Facility": "Rehabilitation",
-    "Psychiatric Hospital": "Other",
-    "Acute Care Hospital": "Other",
-    "Long Term Care Hospital (LTACH)": "Other",
-    "Other": "Other",
-    "Chemical Dependency":"Other",
-    "Shelter":"Home",
-    "Jail":"Home"
+    "home": "Home",
+    "group home":"Home",
+    "against medical advice (ama)": "Home",
+    "assisted living": "Home",
+    "hospice": "Hospice/Expired",
+    "expired": "Hospice/Expired",
+    "skilled nursing facility (snf)": "Rehabilitation",
+    "acute inpatient rehab facility": "Rehabilitation",
+    "psychiatric hospital": "Other",
+    "acute care hospital": "Other",
+    "long term care hospital (ltach)": "Other",
+    "other": "Other",
+    "chemical dependency":"Other",
+    "shelter":"Home",
+    "jail":"Home"
 }
 block_df['discharge_category'] = block_df['discharge_category'].map(mapping)
 log("DISCHARGE POST:")
@@ -711,7 +716,7 @@ log(block_df['discharge_category'].value_counts(dropna=False))
 # ## Remove obersvations with prior PT order
 # Remove any `encounter_block` from both `block_df` and `time_bin.df` where `pt_pre24_IMV` == `True`.
 
-# In[ ]:
+# In[47]:
 
 
 #Exclusion criteria
@@ -726,7 +731,7 @@ log(f"Patients with more than one admission: {block_df.loc[block_df['admission_i
 
 # ## Save
 
-# In[ ]:
+# In[48]:
 
 
 #Save
@@ -738,4 +743,10 @@ path = os.path.join(output_folder,'final',"block_df_3_end_summary.csv")
 summary_df.to_csv(path)
 #Missing summary
 helper.missing_summary(block_df,f_name='block_df_3_end')
+
+
+# In[ ]:
+
+
+
 
